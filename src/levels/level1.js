@@ -66,18 +66,9 @@ export function createLevel1(scene) {
   pillar1.name = 'placeholder_pillar';
   lobby.add(pillar1);
 
-  // Guard A idle spot (stationary guard, near reception desk)
-  lobby.add(makeMarker('guard', -2.5, 0.4, 3, 0.3));
-
-  // Guard B patrol waypoints — visualised as small markers for now.
-  // Your guard-AI person will read these positions to build the patrol loop,
-  // then you can delete the visible spheres once the AI is working.
-  lobby.add(makeMarker('guard', 0, 0.4, 0, 0.2));    // waypoint 1 (centre)
-  lobby.add(makeMarker('guard', 4, 0.4, -3, 0.2));   // waypoint 2
-  lobby.add(makeMarker('guard', 4, 0.4, 3, 0.2));    // waypoint 3
-
+  
   // Player spawn / hiding spot, behind pillar1
-  lobby.add(makeMarker('player', -4, 0.4, -1.5, 0.3));
+  lobby.add(makeMarker('player', -4, 0.4, -3.8, 0.3));
 
   level1.add(lobby);
 
@@ -137,6 +128,19 @@ export function createLevel1(scene) {
   offices.add(mgrOffice);
   level1.add(offices);
 
+    // Everything that can block Guard B's line of sight. All walls share wallMat
+  // and all placeholder furniture shares markerMat.furniture, so one traversal
+  // collects them. The guard/player/keycard markers use the other materials,
+  // so they are excluded automatically (markers must NOT block vision).
+  const colliders = [];
+  level1.traverse((obj) => {
+    if (obj.isMesh && (obj.material === wallMat || obj.material === markerMat.furniture)) {
+      colliders.push(obj);
+    }
+  });
+
   scene.add(level1);
-  return level1;
+  return { root: level1, colliders };
+
+  
 }
