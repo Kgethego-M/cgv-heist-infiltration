@@ -64,25 +64,28 @@ const subtitleEl = document.getElementById('subtitle');
 const game = {
   guardADown: false,
   hasDisguise: false,
-  hasKeycard: false, // the Offices owner's pickup sets this — one state object for all
+  hasKeycard: false,
   alarmActive: false,
   alarmReason: null,
 
   triggerAlarm(reason) {
-    if (this.alarmActive) return; // one alarm system, fires exactly once
+    if (this.alarmActive) return;
     this.alarmActive = true;
     this.alarmReason = reason;
-    // TEMPORARY feedback so guard AI is testable — Elevator/UI owner replaces
-    // with the real red light / siren / escape timer.
+
     ambient.color.setHex(0x881111);
     scene.background.setHex(0x220000);
-    showSubtitle('"His partner just found him — they know you\'re in the building. Elevator, now, go go go!"');
+
+    const alarmSubtitle = reason === 'partner_found'
+      ? '"His partner found the body — they know you’re in the building. Elevator, now!"'
+      : '"You’ve been spotted — they know you’re in the building. Elevator, now!"';
+
+    showSubtitle(alarmSubtitle);
   },
 
   onCaught() {
-    // Lose state — restart with no page refresh (final checklist item in the brief)
     resetLevel();
-    showSubtitle('"You\'re made — get out of there, we\'re resetting."');
+    showSubtitle('"You’ve been caught — resetting the mission."');
   },
 };
 
@@ -113,7 +116,10 @@ const waypoints = [
   new THREE.Vector3(0, 0, 0),
   new THREE.Vector3(4, 0, -3),
   new THREE.Vector3(4, 0, 3),
-  new THREE.Vector3(-1, 0, 3),
+  new THREE.Vector3(-1, 0, 3),  // check Guard A here
+  new THREE.Vector3(0, 0, 8),   // middle of Corridor
+  new THREE.Vector3(0, 0, 10.2), // end of Corridor, before Offices
+  new THREE.Vector3(0, 0, 8),   // walks back through Corridor
 ];
 const guardB = new GuardB(scene, waypoints, colliders, game, { partnerCheckIndex: 3 });
 
