@@ -61,7 +61,7 @@ export function createLevel1(scene) {
   lobby.add(receptionDesk);
 
   // PLACEHOLDER: two cover pillars near player spawn
-  const pillar1 = new THREE.Mesh(new THREE.BoxGeometry(0.6, 4, 0.6), markerMat.furniture);
+  const pillar1 = new THREE.Mesh(new THREE.BoxGeometry(1,4,1), markerMat.furniture);
   pillar1.position.set(-4, 2, -3);
   pillar1.name = 'placeholder_pillar';
   lobby.add(pillar1);
