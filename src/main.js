@@ -1,15 +1,13 @@
 import * as THREE from 'three';
 import { createLevel1 } from './levels/level1.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-import { GuardA, GuardB } from './ai/guards.js';
+import { GuardA, GuardB, loadGuardModel } from './ai/guards.js';
 
 // 1. Scene
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0a0a);
 
-// 2. Camera — currently the camera IS the player (first-person stand-in until
-// the character model exists; guards take the player position as an argument
-// every frame, so swapping in playerModel.position later changes nothing here)
+// 2. Camera — currently the camera IS the player
 const camera = new THREE.PerspectiveCamera(
   75,
   window.innerWidth / window.innerHeight,
@@ -22,7 +20,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// 4. Pointer lock controls — created after the renderer
+// 4. Pointer lock controls
 const controls = new PointerLockControls(camera, renderer.domElement);
 const blocker = document.getElementById('blocker');
 blocker.addEventListener('click', () => controls.lock());
@@ -43,8 +41,7 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// Keys — E is one-shot (!e.repeat stops a held key firing the takedown
-// AND the uniform loot in a single press)
+// Keys
 const keys = {};
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
@@ -57,10 +54,6 @@ window.addEventListener('keyup', (e) => (keys[e.key.toLowerCase()] = false));
 const promptEl = document.getElementById('prompt');
 const subtitleEl = document.getElementById('subtitle');
 
-
-// Guard AI sets these flags; Elevator/UI, Audio and Character owners read them
-// and plug into the hooks. Keep these names stable — the whole team depends
-// on them (Level 1 doc, section 6).
 const game = {
   guardADown: false,
   hasDisguise: false,
@@ -99,19 +92,20 @@ function showSubtitle(text, duration = 4000) {
   }, duration);
 }
 
-// LEVEL + GUARDS
+// LEVEL
 const { colliders } = createLevel1(scene);
 
 const PLAYER_SPAWN = new THREE.Vector3(-4, 1.6, -3.8);
 camera.position.copy(PLAYER_SPAWN);
 camera.rotation.y = Math.PI;
 
-// Guard A — idle at the reception desk
+// GUARDS — model must finish loading before we create either guard, since
+// makeGuardBody() reads the shared template synchronously. Top-level await
+// works here because this file is loaded as an ES module (type="module").
+await loadGuardModel(); // uses the default path: ./assets/models/guard_character.glb
+
 const guardA = new GuardA(scene, game, new THREE.Vector3(-2.5, 0, 3));
 
-// Guard B — patrol loop. Waypoints 1-3 are the original blockout markers.
-// Waypoint 4 is the "check partner" stop next to Guard A's spot (beat 7) —
-// added per the level doc; tell the team if you move any of these.
 const waypoints = [
   new THREE.Vector3(0, 0, 0),
   new THREE.Vector3(4, 0, -3),
@@ -123,13 +117,10 @@ const waypoints = [
 ];
 const guardB = new GuardB(scene, waypoints, colliders, game, { partnerCheckIndex: 3 });
 
-
 function tryInteract() {
   if (guardA.tryInteract(camera.position)) return;
-  // Keycard pickup + elevator win/lose plug in here (Offices / Elevator owners)
 }
 
-//RESET (no page refresh) 
 function resetLevel() {
   game.guardADown = false;
   game.hasDisguise = false;
@@ -141,7 +132,6 @@ function resetLevel() {
   guardB.reset();
   camera.position.copy(PLAYER_SPAWN);
 
-  // Undo the temporary alarm visuals
   ambient.color.setHex(0x1a1a2e);
   ambient.intensity = 0.6;
   scene.background.setHex(0x0a0a0a);
@@ -150,8 +140,8 @@ function resetLevel() {
   promptEl.style.display = 'none';
 }
 
-//  MOVEMENT 
-const PLAYER_SPEED = 3; // m/s — now frame-rate independent via dt (was 0.05/frame)
+// MOVEMENT
+const PLAYER_SPEED = 3;
 function updateMovement(dt) {
   if (keys['w']) controls.moveForward(PLAYER_SPEED * dt);
   if (keys['s']) controls.moveForward(-PLAYER_SPEED * dt);
@@ -159,12 +149,12 @@ function updateMovement(dt) {
   if (keys['d']) controls.moveRight(PLAYER_SPEED * dt);
 }
 
-//  MAIN LOOP 
+// MAIN LOOP
 const clock = new THREE.Clock();
 
 function animate() {
   requestAnimationFrame(animate);
-  const dt = Math.min(clock.getDelta(), 0.05); // clamp: no huge jump after tab-out
+  const dt = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.elapsedTime;
 
   updateMovement(dt);
@@ -172,12 +162,10 @@ function animate() {
   guardA.update(dt);
   guardB.update(dt, camera.position);
 
-  // Interaction prompt
   const promptText = guardA.getPrompt(camera.position);
   promptEl.textContent = promptText || '';
   promptEl.style.display = promptText ? 'block' : 'none';
 
-  // TEMPORARY alarm pulse — Elevator/UI owner replaces with the real effect
   if (game.alarmActive) {
     ambient.intensity = 0.4 + Math.abs(Math.sin(elapsed * 6)) * 0.5;
   }
