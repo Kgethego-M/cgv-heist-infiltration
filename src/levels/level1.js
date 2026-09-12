@@ -9,6 +9,7 @@ const markerMat = {
   player: new THREE.MeshStandardMaterial({ color: 0x33ff66, emissive: 0x33ff66, emissiveIntensity: 0.4 }),
   item: new THREE.MeshStandardMaterial({ color: 0xffcc00, emissive: 0xffcc00, emissiveIntensity: 0.5 }),
   furniture: new THREE.MeshStandardMaterial({ color: 0x8866aa }), // placeholder desks/cover
+  elevator: new THREE.MeshStandardMaterial({ color: 0x00ccff, emissive: 0x00ccff, emissiveIntensity: 0.45 }),
 };
 
 function makeFloor(width, depth, x, z) {
@@ -70,6 +71,24 @@ export function createLevel1(scene) {
   // Player spawn / hiding spot, behind pillar1
   lobby.add(makeMarker('player', -4, 0.4, -3.8, 0.3));
 
+  // PLACEHOLDER: extraction elevator — front-right corner of the Lobby, away
+  // from spawn/reception so it doesn't crowd the sneak-in path. Position is
+  // returned below so main.js can do the win-check distance test without
+  // hardcoding a duplicate copy of these coordinates.
+  const ELEVATOR_POS = new THREE.Vector3(5, 0, -4);
+  const elevatorPad = new THREE.Mesh(new THREE.BoxGeometry(2, 0.1, 2), markerMat.elevator);
+  elevatorPad.position.set(ELEVATOR_POS.x, 0.05, ELEVATOR_POS.z);
+  elevatorPad.name = 'marker_elevator';
+  lobby.add(elevatorPad);
+
+  // Door panel just behind the pad, flush with the front wall — purely
+  // visual, not a collider (elevator marker material is excluded from the
+  // collider traversal below, same as every other marker).
+  const elevatorDoor = new THREE.Mesh(new THREE.BoxGeometry(2, 3, 0.15), markerMat.elevator);
+  elevatorDoor.position.set(ELEVATOR_POS.x, 1.5, ELEVATOR_POS.z - 1);
+  elevatorDoor.name = 'marker_elevator_door';
+  lobby.add(elevatorDoor);
+
   level1.add(lobby);
 
   // ============ CORRIDOR ============
@@ -123,7 +142,8 @@ export function createLevel1(scene) {
   mgrDesk.name = 'placeholder_managerDesk';
   mgrOffice.add(mgrDesk);
 
-  mgrOffice.add(makeMarker('item', 5, 1.0, 19, 0.25)); // the keycard itself
+  const keycardMesh = makeMarker('item', 5, 1.0, 19, 0.25); // the keycard itself
+  mgrOffice.add(keycardMesh);
 
   offices.add(mgrOffice);
   level1.add(offices);
@@ -140,7 +160,5 @@ export function createLevel1(scene) {
   });
 
   scene.add(level1);
-  return { root: level1, colliders };
-
-  
+  return { root: level1, colliders, elevatorPosition: ELEVATOR_POS, keycardMesh };
 }
