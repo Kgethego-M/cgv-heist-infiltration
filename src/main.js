@@ -30,11 +30,22 @@ controls.addEventListener('lock', () => (blocker.style.display = 'none'));
 controls.addEventListener('unlock', () => (blocker.style.display = 'flex'));
 
 // Lights
-const ambient = new THREE.AmbientLight(0x1a1a2e, 0.6);
+// No hemisphere light — real ceiling fixtures (level1.js) are what light
+// the level now, same as a real office. Kept small and dim as a base so
+// unlit corners aren't pure black, not as the main light source.
+const ambient = new THREE.AmbientLight(0x1a1a2e, 0.25);
 scene.add(ambient);
-const pointLight = new THREE.PointLight(0x00ff66, 20, 15);
-pointLight.position.set(0, 3, 0);
-scene.add(pointLight);
+
+// One PointLight per ceiling fixture — positions come straight from
+// level1.js so the light always lines up with its visible panel exactly.
+// Placed slightly below the fixture mesh, angled to spread downward.
+function addCeilingLights(positions) {
+  positions.forEach((pos) => {
+    const light = new THREE.PointLight(0xfff4e0, 6, 7);
+    light.position.set(pos.x, pos.y - 0.3, pos.z);
+    scene.add(light);
+  });
+}
 
 // Resize
 window.addEventListener('resize', () => {
@@ -115,7 +126,8 @@ function showSubtitle(text, duration = 4000) {
 }
 
 // LEVEL
-const { colliders, elevatorPosition, keycardMesh } = createLevel1(scene);
+const { colliders, elevatorPosition, keycardMesh, lightFixturePositions } = createLevel1(scene);
+addCeilingLights(lightFixturePositions);
 
 // Wall collision — one expanded bounding box per collider, computed ONCE.
 const PLAYER_RADIUS = 0.35; // slightly tighter than before — 0.4 felt too generous

@@ -12,6 +12,15 @@ const markerMat = {
   elevator: new THREE.MeshStandardMaterial({ color: 0x00ccff, emissive: 0x00ccff, emissiveIntensity: 0.45 }),
 };
 
+const ceilingMat = new THREE.MeshStandardMaterial({ color: 0x3a3a4a });
+// Fixture panels are lit from WITHIN (emissive) so they read as light sources
+// even before the matching real PointLight (added in main.js) reaches them.
+const fixtureMat = new THREE.MeshStandardMaterial({
+  color: 0xffffff,
+  emissive: 0xfff4e0,
+  emissiveIntensity: 1.4,
+});
+
 function makeFloor(width, depth, x, z) {
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), floorMat);
   floor.rotation.x = -Math.PI / 2;
@@ -30,6 +39,26 @@ function makeWall(width, height, thickness, x, y, z, rotationY = 0) {
   return wall;
 }
 
+// Ceiling plane — rotated the OPPOSITE way from the floor so its visible
+// face points down into the room, not up and out of the building.
+function makeCeiling(width, depth, x, y, z) {
+  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), ceilingMat);
+  ceiling.rotation.x = Math.PI / 2;
+  ceiling.position.set(x, y, z);
+  return ceiling;
+}
+
+// A flush-mounted rectangular light panel, same orientation as the ceiling
+// it's embedded in. Purely visual — main.js adds a matching real PointLight
+// at the same (x, z) position, just slightly below the ceiling itself.
+function makeLightFixture(x, y, z, width = 1.2, depth = 1.2) {
+  const fixture = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), fixtureMat);
+  fixture.rotation.x = Math.PI / 2;
+  fixture.position.set(x, y - 0.02, z); // tiny offset so it doesn't z-fight the ceiling
+  fixture.name = 'light_fixture';
+  return fixture;
+}
+
 function makeMarker(type, x, y, z, size = 0.4) {
   const marker = new THREE.Mesh(new THREE.SphereGeometry(size, 12, 12), markerMat[type]);
   marker.position.set(x, y, z);
@@ -40,6 +69,9 @@ function makeMarker(type, x, y, z, size = 0.4) {
 export function createLevel1(scene) {
   const level1 = new THREE.Group();
   level1.name = 'Level1';
+
+  const CEILING_HEIGHT = 4;
+  const lightFixturePositions = []; // main.js adds a real PointLight at each
 
   // ============ LOBBY ============
   // Room footprint: x from -6 to 6, z from -5 to 5. Wall height 4.
@@ -89,6 +121,12 @@ export function createLevel1(scene) {
   elevatorDoor.name = 'marker_elevator_door';
   lobby.add(elevatorDoor);
 
+  lobby.add(makeCeiling(12, 10, 0, CEILING_HEIGHT, 0));
+  [[-3, -2.5], [3, -2.5], [-3, 2.5], [3, 2.5]].forEach(([x, z]) => {
+    lobby.add(makeLightFixture(x, CEILING_HEIGHT, z));
+    lightFixturePositions.push(new THREE.Vector3(x, CEILING_HEIGHT, z));
+  });
+
   level1.add(lobby);
 
   // ============ CORRIDOR ============
@@ -100,6 +138,12 @@ export function createLevel1(scene) {
   corridor.add(makeFloor(3, 6, 0, 8));
   corridor.add(makeWall(6, 4, 0.2, -1.5, 2, 8, Math.PI / 2)); // left wall
   corridor.add(makeWall(6, 4, 0.2, 1.5, 2, 8, Math.PI / 2));  // right wall
+
+  corridor.add(makeCeiling(3, 6, 0, CEILING_HEIGHT, 8));
+  [[0, 6.5], [0, 9.5]].forEach(([x, z]) => {
+    corridor.add(makeLightFixture(x, CEILING_HEIGHT, z, 1.2, 1.2));
+    lightFixturePositions.push(new THREE.Vector3(x, CEILING_HEIGHT, z));
+  });
 
   level1.add(corridor);
 
@@ -145,6 +189,16 @@ export function createLevel1(scene) {
   const keycardMesh = makeMarker('item', 5, 1.0, 19, 0.25); // the keycard itself
   mgrOffice.add(keycardMesh);
 
+  offices.add(makeCeiling(14, 10, 0, CEILING_HEIGHT, 16));
+  [[-4, 13], [-1, 13], [2, 13], [-4, 19], [-1, 19]].forEach(([x, z]) => {
+    offices.add(makeLightFixture(x, CEILING_HEIGHT, z));
+    lightFixturePositions.push(new THREE.Vector3(x, CEILING_HEIGHT, z));
+  });
+  // Manager's Office gets its own single fixture, matching the accent
+  // light already set up for that room in main.js.
+  mgrOffice.add(makeLightFixture(5, CEILING_HEIGHT, 19, 1.4, 1.4));
+  lightFixturePositions.push(new THREE.Vector3(5, CEILING_HEIGHT, 19));
+
   offices.add(mgrOffice);
   level1.add(offices);
 
@@ -160,5 +214,11 @@ export function createLevel1(scene) {
   });
 
   scene.add(level1);
-  return { root: level1, colliders, elevatorPosition: ELEVATOR_POS, keycardMesh };
+  return {
+    root: level1,
+    colliders,
+    elevatorPosition: ELEVATOR_POS,
+    keycardMesh,
+    lightFixturePositions,
+  };
 }
