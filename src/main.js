@@ -8,9 +8,7 @@ import { Player, loadPlayerModel } from './player/player.js';
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0a0a);
 
-// 2. Camera — now a THIRD-PERSON follow camera, not the player itself.
-// PointerLockControls still owns its rotation (mouse look), but we take over
-// its POSITION every frame instead of letting moveForward/moveRight touch it.
+// 2. Camera — third-person follow camera, position driven manually each frame
 const camera = new THREE.PerspectiveCamera(
   75,
   window.innerWidth / window.innerHeight,
@@ -23,9 +21,8 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// 4. Pointer lock controls — we only use this for mouse-look rotation now.
-// We deliberately never call controls.moveForward/moveRight; movement below
-// is computed manually so it can drive the PLAYER, with the camera following.
+// 4. Pointer lock controls — mouse-look rotation only, we never call
+// controls.moveForward/moveRight
 const controls = new PointerLockControls(camera, renderer.domElement);
 const blocker = document.getElementById('blocker');
 blocker.addEventListener('click', () => controls.lock());
@@ -46,13 +43,15 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// Keys — added Shift (sprint) and Ctrl (crouch) on top of the existing set.
+// Keys
 const keys = {};
+let isProne = false; // toggled by 'c', separate from the held-down movement keys
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   keys[k] = true;
   if (k === 'e' && !e.repeat) tryInteract();
   if (k === 'v' && !e.repeat) toggleCameraMode();
+  if (k === 'c' && !e.repeat) isProne = !isProne;
 });
 window.addEventListener('keyup', (e) => (keys[e.key.toLowerCase()] = false));
 
@@ -118,17 +117,14 @@ function showSubtitle(text, duration = 4000) {
 // LEVEL
 const { colliders, elevatorPosition, keycardMesh } = createLevel1(scene);
 
-// Wall collision — one bounding box per collider, computed ONCE here (not
-// per frame) and expanded by the player's radius so we can just test a
-// single point against it later, rather than doing box-vs-box math every frame.
-const PLAYER_RADIUS = 0.4;
+// Wall collision — one expanded bounding box per collider, computed ONCE.
+const PLAYER_RADIUS = 0.35; // slightly tighter than before — 0.4 felt too generous
 const _testPoint = new THREE.Vector3();
 const colliderBoxes = colliders.map((mesh) => {
   const box = new THREE.Box3().setFromObject(mesh);
   box.expandByScalar(PLAYER_RADIUS);
   return box;
 });
-
 function checkCollision(x, z) {
   _testPoint.set(x, 0.9, z);
   for (let i = 0; i < colliderBoxes.length; i++) {
@@ -137,11 +133,10 @@ function checkCollision(x, z) {
   return false;
 }
 
-const PLAYER_SPAWN = new THREE.Vector3(-4, 0, -4.3); // floor-level now, not eye height
+const PLAYER_SPAWN = new THREE.Vector3(-4, 0, -4.3);
 
-// GUARDS + PLAYER — both models must finish loading before use. Loading them
-// together (Promise.all) rather than one after another saves a little time.
-const [guardGltfLoaded, playerGltf] = await Promise.all([
+// PLAYER + GUARDS
+const [, playerGltf] = await Promise.all([
   loadGuardModel(),
   loadPlayerModel(),
 ]);
@@ -162,25 +157,74 @@ const waypoints = [
 ];
 const guardB = new GuardB(scene, waypoints, colliders, game, { partnerCheckIndex: 3 });
 
-// CAMERA MODES — 'V' toggles between them. Both reuse the same player
-// position/rotation; only the offset (and whether the model is visible) changes.
+// CAMERA MODES
 const CAMERA_MODE = { FIRST: 'first', THIRD: 'third' };
 let cameraMode = CAMERA_MODE.THIRD;
-const THIRD_PERSON_OFFSET = new THREE.Vector3(0, 2.2, 4.5); // behind & above, local
-const FIRST_PERSON_OFFSET = new THREE.Vector3(0, 1.6, 0.15); // just in front of the head
+const THIRD_PERSON_OFFSET = new THREE.Vector3(0, 2.2, 4.5);
+const FIRST_PERSON_OFFSET = new THREE.Vector3(0, 1.6, 0.15);
 
 function toggleCameraMode() {
   cameraMode = cameraMode === CAMERA_MODE.THIRD ? CAMERA_MODE.FIRST : CAMERA_MODE.THIRD;
-  player.model.visible = cameraMode === CAMERA_MODE.THIRD; // hide own body in first-person
+  player.model.visible = cameraMode === CAMERA_MODE.THIRD;
 }
 player.model.visible = cameraMode === CAMERA_MODE.THIRD;
 
-// Reused every frame — never allocate inside animate()
+// Reused every frame
 const _camForward = new THREE.Vector3();
 const _camRight = new THREE.Vector3();
 const _moveDir = new THREE.Vector3();
 const _desiredCamPos = new THREE.Vector3();
 const _yawEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+const _camPivot = new THREE.Vector3();
+const _camDir = new THREE.Vector3();
+const _camRaycaster = new THREE.Raycaster();
+
+// WALL HUG — hold Q facing a wall to snap your back against it, then
+// strafe with A/D to slide along it.
+const WALL_HUG_RANGE = 1.2;
+const WALL_HUG_OFFSET = 0.4;
+const WALL_HUG_SPEED = 1.2;
+const _wallRayOrigin = new THREE.Vector3();
+const _wallForward = new THREE.Vector3();
+const _wallNormal = new THREE.Vector3();
+const _wallRight = new THREE.Vector3();
+const _wallRaycaster = new THREE.Raycaster();
+let isWallHugging = false;
+
+function updateWallHug(dt) {
+  if (!isWallHugging) {
+    camera.getWorldDirection(_wallForward);
+    _wallForward.y = 0;
+    _wallForward.normalize();
+
+    _wallRayOrigin.copy(player.group.position);
+    _wallRayOrigin.y = 1.2;
+    _wallRaycaster.set(_wallRayOrigin, _wallForward);
+    _wallRaycaster.far = WALL_HUG_RANGE;
+    const hits = _wallRaycaster.intersectObjects(colliders, false);
+    if (hits.length === 0) return; // nothing to hug — holding Q does nothing here
+
+    _wallNormal.copy(hits[0].face.normal).transformDirection(hits[0].object.matrixWorld);
+    isWallHugging = true;
+
+    player.group.position.copy(hits[0].point).addScaledVector(_wallNormal, WALL_HUG_OFFSET);
+    player.group.rotation.y = Math.atan2(_wallNormal.x, _wallNormal.z);
+  }
+
+  _wallRight.set(_wallNormal.z, 0, -_wallNormal.x);
+  let strafe = 0;
+  if (keys['d']) strafe += 1;
+  if (keys['a']) strafe -= 1;
+
+  if (strafe !== 0) {
+    const nextX = player.group.position.x + _wallRight.x * strafe * WALL_HUG_SPEED * dt;
+    const nextZ = player.group.position.z + _wallRight.z * strafe * WALL_HUG_SPEED * dt;
+    if (!checkCollision(nextX, player.group.position.z)) player.group.position.x = nextX;
+    if (!checkCollision(player.group.position.x, nextZ)) player.group.position.z = nextZ;
+  }
+
+  player.playAction('WallWalk');
+}
 
 const _distTmp = new THREE.Vector3();
 function distanceXZ(a, b) {
@@ -257,21 +301,24 @@ function resetLevel() {
   promptEl.style.display = 'none';
 }
 
-// MOVEMENT — now moves the PLAYER, not the camera. Speed varies by state:
-// crouching is slower and stealthier, sprinting is faster but louder/riskier
-// (worth wiring sprint into guard detection range later, as a stretch goal).
+// MOVEMENT
 const WALK_SPEED = 3;
 const SPRINT_SPEED = 5;
 const CROUCH_SPEED = 1.5;
+const PRONE_SPEED = 0.8;
 
 function updateMovement(dt) {
-  // Camera's current facing, projected onto the ground plane — this is what
-  // "forward" means for movement, regardless of how far the camera has
-  // orbited behind the player.
+  if (keys['q']) {
+    updateWallHug(dt);
+    return;
+  } else if (isWallHugging) {
+    isWallHugging = false; // Q released — resume normal movement next frame
+  }
+
   camera.getWorldDirection(_camForward);
   _camForward.y = 0;
   _camForward.normalize();
-  _camRight.set(-_camForward.z, 0, _camForward.x); // 90°, matches guards.js's convention
+  _camRight.set(-_camForward.z, 0, _camForward.x); // fixed: was inverted before
 
   _moveDir.set(0, 0, 0);
   if (keys['w']) _moveDir.add(_camForward);
@@ -280,16 +327,13 @@ function updateMovement(dt) {
   if (keys['d']) _moveDir.add(_camRight);
 
   const isMoving = _moveDir.lengthSq() > 0;
-  const isCrouching = keys['control'];
-  const isSprinting = keys['shift'] && !isCrouching;
+  const isCrouching = keys['control'] && !isProne;
+  const isSprinting = keys['shift'] && !isCrouching && !isProne;
 
   if (isMoving) {
     _moveDir.normalize();
-    const speed = isCrouching ? CROUCH_SPEED : isSprinting ? SPRINT_SPEED : WALK_SPEED;
+    const speed = isProne ? PRONE_SPEED : isCrouching ? CROUCH_SPEED : isSprinting ? SPRINT_SPEED : WALK_SPEED;
 
-    // Checking X and Z separately (not as one combined move) lets the player
-    // slide along a wall instead of getting fully stopped when approaching
-    // it at an angle.
     const nextX = player.group.position.x + _moveDir.x * speed * dt;
     const nextZ = player.group.position.z + _moveDir.z * speed * dt;
     if (!checkCollision(nextX, player.group.position.z)) player.group.position.x = nextX;
@@ -297,12 +341,16 @@ function updateMovement(dt) {
 
     player.group.rotation.y = Math.atan2(_moveDir.x, _moveDir.z);
 
-    player.playAction(isCrouching ? 'LowWalk' : isSprinting ? 'Sprint' : 'Walking');
+    const clip = isProne ? 'Crawl' : isCrouching ? 'LowWalk' : isSprinting ? 'Sprint' : 'Walking';
+    player.playAction(clip);
   } else {
     player.playAction('Idle');
   }
 }
 
+// Camera collision: raycast from a chest-height pivot toward the desired
+// third-person position; pull the camera in front of any wall it would
+// otherwise end up outside of.
 function updateCamera() {
   _yawEuler.setFromQuaternion(camera.quaternion, 'YXZ');
   const yaw = _yawEuler.y;
@@ -311,7 +359,44 @@ function updateCamera() {
   _desiredCamPos.copy(offset).applyEuler(new THREE.Euler(0, yaw, 0));
   _desiredCamPos.add(player.group.position);
 
+  if (cameraMode === CAMERA_MODE.THIRD) {
+    _camPivot.copy(player.group.position);
+    _camPivot.y += 1.5;
+
+    _camDir.subVectors(_desiredCamPos, _camPivot);
+    const camDist = _camDir.length();
+    _camDir.normalize();
+
+    _camRaycaster.set(_camPivot, _camDir);
+    _camRaycaster.far = camDist;
+    const hits = _camRaycaster.intersectObjects(colliders, false);
+    if (hits.length > 0) {
+      const safeDist = Math.max(hits[0].distance - 0.2, 0.3);
+      _desiredCamPos.copy(_camPivot).addScaledVector(_camDir, safeDist);
+    }
+  }
+
   camera.position.copy(_desiredCamPos);
+}
+
+// MINIMAP — second small renderer, top-down orthographic, follows the
+// player's X/Z each frame. North-up (doesn't rotate with the player) —
+// simpler, and plenty readable for a level this size.
+const minimapCanvas = document.getElementById('minimap');
+const minimapRenderer = new THREE.WebGLRenderer({ canvas: minimapCanvas, antialias: true, alpha: true });
+minimapRenderer.setSize(180, 180);
+
+const MINIMAP_VIEW_SIZE = 10;
+const minimapCamera = new THREE.OrthographicCamera(
+  -MINIMAP_VIEW_SIZE, MINIMAP_VIEW_SIZE, MINIMAP_VIEW_SIZE, -MINIMAP_VIEW_SIZE, 0.1, 100
+);
+minimapCamera.position.set(0, 30, 0);
+minimapCamera.rotation.x = -Math.PI / 2;
+
+function updateMinimap() {
+  minimapCamera.position.x = player.group.position.x;
+  minimapCamera.position.z = player.group.position.z;
+  minimapRenderer.render(scene, minimapCamera);
 }
 
 // MAIN LOOP
@@ -340,5 +425,6 @@ function animate() {
   }
 
   renderer.render(scene, camera);
+  updateMinimap();
 }
 animate();
