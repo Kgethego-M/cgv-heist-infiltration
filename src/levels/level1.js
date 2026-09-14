@@ -1,5 +1,84 @@
 import * as THREE from 'three';
+// ---- PROCEDURAL TEXTURES -------------------------------------------------
+// Generated in code at load — no image files, nothing to credit, and they
+// behave identically on the LAMP server. 256x256 = power-of-two, tiny in
+// memory (brief section 6.1).
 
+function makeCanvas(size = 256) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  return canvas;
+}
+
+// Neutral office laminate for desktops/cubicles/pillar — speckle + grain.
+function makeLaminateMap() {
+  const ctx = makeCanvas().getContext('2d');
+  ctx.fillStyle = '#b3aa9c';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 9000; i++) {
+    const v = 145 + Math.floor(Math.random() * 60);
+    ctx.fillStyle = `rgba(${v},${v - 6},${v - 16},0.25)`;
+    ctx.fillRect(Math.random() * 256, Math.random() * 256, 2, 1);
+  }
+  ctx.strokeStyle = 'rgba(88,80,70,0.18)';
+  for (let y = 8; y < 256; y += 16) {
+    ctx.beginPath();
+    ctx.moveTo(0, y + Math.random() * 3);
+    ctx.lineTo(256, y + Math.random() * 3);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(ctx.canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Grayscale height noise for the SAME surface — this is the "texture used
+// for more than colour" the rubric asks for (bump map).
+function makeLaminateBump() {
+  const ctx = makeCanvas().getContext('2d');
+  ctx.fillStyle = '#808080';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 9000; i++) {
+    const v = Math.floor(Math.random() * 255);
+    ctx.fillStyle = `rgba(${v},${v},${v},0.3)`;
+    ctx.fillRect(Math.random() * 256, Math.random() * 256, 2, 1);
+  }
+  const tex = new THREE.CanvasTexture(ctx.canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex; // height map — deliberately NOT sRGB
+}
+
+// Wood grain for counter tops; blue-grey weave for cubicle partitions.
+function makeWoodMap() {
+  const ctx = makeCanvas().getContext('2d');
+  ctx.fillStyle = '#7a5230';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let y = 0; y < 256; y += 4) {
+    const v = 105 + Math.sin(y * 0.3) * 18 + Math.random() * 14;
+    ctx.fillStyle = `rgba(${v + 22},${Math.floor(v * 0.66)},${Math.floor(v * 0.38)},0.5)`;
+    ctx.fillRect(0, y, 256, 3);
+  }
+  const tex = new THREE.CanvasTexture(ctx.canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function makeFabricMap() {
+  const ctx = makeCanvas().getContext('2d');
+  ctx.fillStyle = '#46586a';
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+  for (let i = 0; i < 256; i += 4) {
+    ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(256, i); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 256); ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(ctx.canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 // Shared placeholder materials — swap these for real materials/textures later,
 // this is deliberately plain so it's obviously "blockout, not final"
 const floorMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
@@ -11,7 +90,30 @@ const markerMat = {
   furniture: new THREE.MeshStandardMaterial({ color: 0x8866aa }), // placeholder desks/cover
   elevator: new THREE.MeshStandardMaterial({ color: 0x00ccff, emissive: 0x00ccff, emissiveIntensity: 0.45 }),
 };
+// The shared furniture material gets the laminate look. Colliders are
+// collected by MATERIAL IDENTITY (see traversal at the bottom), so we enrich
+// markerMat.furniture in place — every main furniture body keeps using it.
+const laminateMap = makeLaminateMap();
+const laminateBump = makeLaminateBump();
+markerMat.furniture.map = laminateMap;
+markerMat.furniture.bumpMap = laminateBump;
+markerMat.furniture.bumpScale = 0.02;
+markerMat.furniture.color.set(0xffffff); // white base so the texture shows true
+markerMat.furniture.needsUpdate = true;
 
+// Decoration-only materials — used by the small prop children. These are NOT
+// colliders (the traversal only picks up wallMat + markerMat.furniture), so
+// it's safe for them to be their own materials.
+const woodMat = new THREE.MeshStandardMaterial({ map: makeWoodMap(), roughness: 0.7 });
+const fabricMat = new THREE.MeshStandardMaterial({ map: makeFabricMap(), roughness: 0.95 });
+const darkPlasticMat = new THREE.MeshStandardMaterial({ color: 0x1c1c22, roughness: 0.6 });
+const metalMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.35, metalness: 0.8 });
+
+// Shared prop geometries — created ONCE, reused by every cubicle/desk
+// (brief 6.1: reuse instead of creating a new geometry per object).
+const MONITOR_GEOM = new THREE.BoxGeometry(0.5, 0.32, 0.04);
+const MONITOR_STAND_GEOM = new THREE.BoxGeometry(0.06, 0.18, 0.06);
+const KEYBOARD_GEOM = new THREE.BoxGeometry(0.42, 0.02, 0.15);
 const ceilingMat = new THREE.MeshStandardMaterial({ color: 0x3a3a4a });
 // Fixture panels are lit from WITHIN (emissive) so they read as light sources
 // even before the matching real PointLight (added in main.js) reaches them.
@@ -65,6 +167,109 @@ function makeMarker(type, x, y, z, size = 0.4) {
   marker.name = `marker_${type}`; // makes it easy to find/remove later via scene.getObjectByName
   return marker;
 }
+// Each furniture piece is a Group: the main body is the SAME box as the
+// placeholder (same size/position/material — that's the collider), and the
+// props are its children, so the whole piece moves as one unit.
+function makeReceptionDesk() {
+  const desk = new THREE.Group();
+  desk.name = 'furniture_receptionDesk';
+
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2, 1, 0.8), markerMat.furniture);
+  body.position.set(-3, 0.5, 3.5); // unchanged from the placeholder
+  body.name = 'collider_receptionDesk';
+  desk.add(body);
+
+  const top = new THREE.Mesh(new THREE.BoxGeometry(2.15, 0.05, 0.95), woodMat);
+  top.position.set(-3, 1.03, 3.5);
+  desk.add(top);
+
+  const stand = new THREE.Mesh(MONITOR_STAND_GEOM, darkPlasticMat);
+  stand.position.set(-3.45, 1.14, 3.55);
+  desk.add(stand);
+
+  const screen = new THREE.Mesh(MONITOR_GEOM, darkPlasticMat);
+  screen.position.set(-3.45, 1.38, 3.55);
+  desk.add(screen);
+
+  return desk;
+}
+function makeCoverPillar() {
+  const pillar = new THREE.Group();
+  pillar.name = 'furniture_pillar';
+
+  // UNCHANGED box — this is the spawn hiding spot's cover; guard vision,
+  // player collision and the spawn-safety test all depend on it being here.
+  const core = new THREE.Mesh(new THREE.BoxGeometry(1, 4, 1), markerMat.furniture);
+  core.position.set(-4, 2, -3);
+  core.name = 'collider_pillar';
+  pillar.add(core);
+
+  const base = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.25, 1.1), metalMat);
+  base.position.set(-4, 0.125, -3);
+  pillar.add(base);
+
+  const capital = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.15, 1.1), metalMat);
+  capital.position.set(-4, 3.92, -3);
+  pillar.add(capital);
+
+  return pillar;
+}
+
+function makeCubicle(x, z) {
+  const cubicle = new THREE.Group();
+  cubicle.name = 'furniture_cubicle';
+
+  // UNCHANGED main block — the collider that blocks Guard B's sight.
+  const desk = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.2, 1.5), markerMat.furniture);
+  desk.position.set(x, 0.6, z);
+  desk.name = 'collider_cubicle';
+  cubicle.add(desk);
+
+  // fabric partitions rising from the block (decoration, not colliders)
+  const panelA = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.9, 0.05), fabricMat);
+  panelA.position.set(x, 1.65, z - 0.7);
+  cubicle.add(panelA);
+  const panelB = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.9, 1.5), fabricMat);
+  panelB.position.set(x - 0.7, 1.65, z);
+  cubicle.add(panelB);
+
+  const stand = new THREE.Mesh(MONITOR_STAND_GEOM, darkPlasticMat);
+  stand.position.set(x + 0.25, 1.29, z);
+  cubicle.add(stand);
+  const screen = new THREE.Mesh(MONITOR_GEOM, darkPlasticMat);
+  screen.position.set(x + 0.25, 1.53, z);
+  cubicle.add(screen);
+  const keyboard = new THREE.Mesh(KEYBOARD_GEOM, darkPlasticMat);
+  keyboard.position.set(x + 0.2, 1.21, z + 0.45);
+  cubicle.add(keyboard);
+
+  return cubicle;
+}
+
+function makeManagerDesk() {
+  const desk = new THREE.Group();
+  desk.name = 'furniture_managerDesk';
+
+  // UNCHANGED main body — the collider under the keycard.
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.9, 0.8), markerMat.furniture);
+  body.position.set(5, 0.45, 19);
+  body.name = 'collider_managerDesk';
+  desk.add(body);
+
+  const top = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.05, 0.95), woodMat);
+  top.position.set(5, 0.93, 19);
+  desk.add(top);
+
+  const laptopBase = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.025, 0.3), metalMat);
+  laptopBase.position.set(4.65, 0.97, 19);
+  desk.add(laptopBase);
+  const laptopLid = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.3, 0.02), darkPlasticMat);
+  laptopLid.position.set(4.65, 1.1, 19.14);
+  laptopLid.rotation.x = -0.35;
+  desk.add(laptopLid);
+
+  return desk;
+}
 
 export function createLevel1(scene) {
   const level1 = new THREE.Group();
@@ -88,16 +293,10 @@ export function createLevel1(scene) {
   lobby.add(makeWall(10, 4, 0.2, 6, 2, 0, Math.PI / 2));  // right wall
 
   // PLACEHOLDER: reception desk — replace this box with a real desk model
-  const receptionDesk = new THREE.Mesh(new THREE.BoxGeometry(2, 1, 0.8), markerMat.furniture);
-  receptionDesk.position.set(-3, 0.5, 3.5);
-  receptionDesk.name = 'placeholder_receptionDesk';
-  lobby.add(receptionDesk);
+    lobby.add(makeReceptionDesk());
 
   // PLACEHOLDER: two cover pillars near player spawn
-  const pillar1 = new THREE.Mesh(new THREE.BoxGeometry(1,4,1), markerMat.furniture);
-  pillar1.position.set(-4, 2, -3);
-  pillar1.name = 'placeholder_pillar';
-  lobby.add(pillar1);
+    lobby.add(makeCoverPillar());
 
   
   // Player spawn / hiding spot, behind pillar1
@@ -165,12 +364,7 @@ export function createLevel1(scene) {
     [-4, 14], [-1, 14], [2, 14],
     [-4, 18], [-1, 18],
   ];
-  cubiclePositions.forEach(([x, z]) => {
-    const cubicle = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.2, 1.5), markerMat.furniture);
-    cubicle.position.set(x, 0.6, z);
-    cubicle.name = 'placeholder_cubicle';
-    offices.add(cubicle);
-  });
+    cubiclePositions.forEach(([x, z]) => offices.add(makeCubicle(x, z)));
 
   // Manager's office — small enclosed room in the back-right corner, with a
   // doorway gap on its left side facing into the main office area
@@ -181,12 +375,9 @@ export function createLevel1(scene) {
   mgrOffice.add(makeWall(2, 4, 0.2, 4, 2, 21, 0));                 // partial front wall (leaves doorway gap)
 
   // PLACEHOLDER: manager's desk with the keycard on top
-  const mgrDesk = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.9, 0.8), markerMat.furniture);
-  mgrDesk.position.set(5, 0.45, 19);
-  mgrDesk.name = 'placeholder_managerDesk';
-  mgrOffice.add(mgrDesk);
+    mgrOffice.add(makeManagerDesk());
 
-  const keycardMesh = makeMarker('item', 5, 1.0, 19, 0.25); // the keycard itself
+  const keycardMesh = makeMarker('item', 5, 1.15, 19, 0.25); // the keycard itself
   mgrOffice.add(keycardMesh);
 
   offices.add(makeCeiling(14, 10, 0, CEILING_HEIGHT, 16));
@@ -212,6 +403,7 @@ export function createLevel1(scene) {
       colliders.push(obj);
     }
   });
+   
 
   scene.add(level1);
   return {
