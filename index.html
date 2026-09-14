@@ -13,6 +13,17 @@
       }
       #prompt { bottom: 18%; font-size: 20px; }
       #subtitle { bottom: 8%; font-style: italic; font-size: 16px; color: #cfe3ff; }
+            #endScreen {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        display: none; flex-direction: column; align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.78); color: #eee; font-family: sans-serif;
+        text-align: center; z-index: 20; cursor: pointer;
+      }
+      #endScreen h1 { font-size: 52px; letter-spacing: 4px; margin: 0 0 14px; }
+      #endScreen.win h1 { color: #4caf7d; }
+      #endScreen.lose h1 { color: #e05252; }
+      #endScreen p { font-size: 18px; color: #cfe3ff; margin: 6px 0; }
+      #endScreen .hint { font-size: 14px; color: #8899bb; margin-top: 26px; }
     </style>
   </head>
   <body>
@@ -45,6 +56,12 @@
          earpiece system (voice + audio) later. -->
     <div id="prompt"></div>
     <div id="subtitle"></div>
+        <!-- Win/lose overlay — restart happens in place, no page refresh -->
+    <div id="endScreen">
+      <h1 id="endTitle"></h1>
+      <p id="endMessage"></p>
+      <p class="hint">Press R or click to play again</p>
+    </div>
 
     <script type="module" src="/src/main.js"></script>
   </body>

@@ -75,12 +75,17 @@ window.addEventListener('keydown', (e) => {
   if (k === 'e' && !e.repeat) tryInteract();
   if (k === 'v' && !e.repeat) toggleCameraMode();
   if (k === 'c' && !e.repeat) isProne = !isProne;
+  if (k === 'r' && !e.repeat && endScreenVisible()) restartFromEndScreen();
 });
 window.addEventListener('keyup', (e) => (keys[e.key.toLowerCase()] = false));
 
 // HUD
 const promptEl = document.getElementById('prompt');
 const subtitleEl = document.getElementById('subtitle');
+const endScreenEl = document.getElementById('endScreen');
+const endTitleEl = document.getElementById('endTitle');
+const endMessageEl = document.getElementById('endMessage');
+endScreenEl.addEventListener('click', restartFromEndScreen);
 
 const ESCAPE_TIME_LIMIT = 25;
 const ELEVATOR_REACH_DISTANCE = 1.8;
@@ -94,12 +99,14 @@ const game = {
   alarmReason: null,
   levelComplete: false,
   escapeTimeRemaining: null,
+  alarmsRaised: 0,
 
   triggerAlarm(reason) {
     if (this.alarmActive) return;
     this.alarmActive = true;
     this.alarmReason = reason;
     this.escapeTimeRemaining = ESCAPE_TIME_LIMIT;
+    this.alarmsRaised += 1;
 
     ambient.color.setHex(0x881111);
     scene.background.setHex(0x220000);
@@ -107,16 +114,31 @@ const game = {
     showLine(reason === 'partner_found' ? 'alarmPartnerFound' : 'alarmSpotted');
   },
 
-  onCaught(reason = 'caught') {
-    resetLevel();
-    showLine(reason === 'timeout' ? 'timeout' : 'caught');
+    onCaught(reason = 'caught') {
+    if (this.levelComplete || endScreenVisible()) return;
+    controls.unlock();
+    const line = playLine(reason === 'timeout' ? 'timeout' : 'caught');
+    const message = line || (reason === 'timeout'
+      ? 'The escape window closed — security caught you at the elevator.'
+      : 'A guard caught you before you reached the elevator.');
+    showEndScreen(false, message);
   },
 
-  onWin() {
+    onWin() {
     if (this.levelComplete) return;
     this.levelComplete = true;
     controls.unlock();
-    showSubtitle(`${playLine('elevatorWin')} Level complete.`, 8000);
+
+    const secondsTaken = Math.floor((performance.now() - attemptStart) / 1000);
+    const secondsLeft = Math.max(0, Math.ceil(this.escapeTimeRemaining ?? 0));
+    const alarmText = this.alarmsRaised === 0
+      ? 'no alarms raised — clean run'
+      : `${this.alarmsRaised} alarm raised, ${secondsLeft}s left on the escape clock`;
+    const winLine = playLine('elevatorWin');
+
+    showEndScreen(true, winLine
+      ? `${winLine} Cleared in ${secondsTaken}s — ${alarmText}.`
+      : `Cleared in ${secondsTaken}s — ${alarmText}.`);
   },
 };
 
@@ -136,6 +158,28 @@ function showSubtitle(text, duration = 4000) {
 function showLine(key, duration) {
   const text = playLine(key);
   if (text) showSubtitle(text, duration);
+}
+let attemptStart = performance.now();
+
+function showEndScreen(won, message) {
+  endTitleEl.textContent = won ? 'LEVEL COMPLETE' : 'MISSION FAILED';
+  endMessageEl.textContent = message;
+  endScreenEl.className = won ? 'win' : 'lose';
+  endScreenEl.style.display = 'flex';
+}
+
+function hideEndScreen() {
+  endScreenEl.style.display = 'none';
+}
+
+function endScreenVisible() {
+  return endScreenEl.style.display === 'flex';
+}
+
+function restartFromEndScreen() {
+  hideEndScreen();
+  resetLevel();
+  blocker.style.display = 'flex'; // back to "Click to look around" — existing re-lock path
 }
 
 // LEVEL
@@ -373,6 +417,9 @@ function resetLevel() {
   clearTimeout(subtitleTimer);
   subtitleEl.style.display = 'none';
   promptEl.style.display = 'none';
+
+  game.alarmsRaised = 0;
+  attemptStart = performance.now();
 }
 
 // MOVEMENT
@@ -481,7 +528,7 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.elapsedTime;
 
-  if (!game.levelComplete) {
+    if (!game.levelComplete && !endScreenVisible()) {
     updateMovement(dt);
     updateCamera();
     player.update(dt);
@@ -492,7 +539,7 @@ function animate() {
     checkElevator(dt, elapsed);
   }
 
-  const promptText = game.levelComplete ? null : getInteractPrompt();
+    const promptText = (game.levelComplete || endScreenVisible()) ? null : getInteractPrompt();
   promptEl.textContent = promptText || '';
   promptEl.style.display = promptText ? 'block' : 'none';
 
