@@ -3,6 +3,7 @@ import { createLevel1 } from './levels/level1.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { GuardA, GuardB, loadGuardModel } from './ai/guards.js';
 import { Player, loadPlayerModel } from './player/player.js';
+import { loadEarpieceAudio, playLine } from './audio/earpiece.js';
 
 // 1. Scene
 const scene = new THREE.Scene();
@@ -26,7 +27,18 @@ document.body.appendChild(renderer.domElement);
 const controls = new PointerLockControls(camera, renderer.domElement);
 const blocker = document.getElementById('blocker');
 blocker.addEventListener('click', () => controls.lock());
-controls.addEventListener('lock', () => (blocker.style.display = 'none'));
+
+// The very first lock is also the first real user gesture on the page,
+// which is the necessary place (per browser autoplay rules) to kick off
+// the intro earpiece line.
+let hasPlayedIntro = false;
+controls.addEventListener('lock', () => {
+  blocker.style.display = 'none';
+  if (!hasPlayedIntro) {
+    hasPlayedIntro = true;
+    showLine('levelStart', 6000);
+  }
+});
 controls.addEventListener('unlock', () => (blocker.style.display = 'flex'));
 
 // Lights
@@ -92,26 +104,19 @@ const game = {
     ambient.color.setHex(0x881111);
     scene.background.setHex(0x220000);
 
-    const alarmSubtitle = reason === 'partner_found'
-      ? '"His partner found the body — they know you\u2019re in the building. Elevator, now!"'
-      : '"You\u2019ve been spotted — they know you\u2019re in the building. Elevator, now!"';
-
-    showSubtitle(alarmSubtitle);
+    showLine(reason === 'partner_found' ? 'alarmPartnerFound' : 'alarmSpotted');
   },
 
   onCaught(reason = 'caught') {
     resetLevel();
-    const line = reason === 'timeout'
-      ? '"Too slow — they\u2019ve got you. Resetting the mission."'
-      : '"You\u2019ve been caught — resetting the mission."';
-    showSubtitle(line);
+    showLine(reason === 'timeout' ? 'timeout' : 'caught');
   },
 
   onWin() {
     if (this.levelComplete) return;
     this.levelComplete = true;
     controls.unlock();
-    showSubtitle('"Doors are open — go, go!" Level complete.', 8000);
+    showSubtitle(`${playLine('elevatorWin')} Level complete.`, 8000);
   },
 };
 
@@ -125,9 +130,27 @@ function showSubtitle(text, duration = 4000) {
   }, duration);
 }
 
+// Plays the matching earpiece clip and shows its caption together, the
+// single entry point every trigger below should use instead of calling
+// showSubtitle() with a hand-typed string.
+function showLine(key, duration) {
+  const text = playLine(key);
+  if (text) showSubtitle(text, duration);
+}
+
 // LEVEL
-const { colliders, elevatorPosition, keycardMesh, lightFixturePositions } = createLevel1(scene);
+const { root, colliders, elevatorPosition, keycardMesh, lightFixturePositions } = createLevel1(scene);
 addCeilingLights(lightFixturePositions);
+
+// Earpiece audio: preload doesn't need a user gesture, only .play() does,
+// so this can fire immediately. Missing clips fail individually and just
+// fall back to captions (see audio/earpiece.js).
+loadEarpieceAudio();
+
+// Computed once, same pattern as the wall collider boxes below, used to
+// detect the player's first step into the Offices for the earpiece line.
+const officesGroup = root.getObjectByName('Offices');
+const officesBox = officesGroup ? new THREE.Box3().setFromObject(officesGroup) : null;
 
 // Wall collision — one expanded bounding box per collider, computed ONCE.
 const PLAYER_RADIUS = 0.35; // slightly tighter than before — 0.4 felt too generous
@@ -250,13 +273,45 @@ function tryPickupKeycard() {
 
   game.hasKeycard = true;
   keycardMesh.visible = false;
-  showSubtitle('"That\u2019s it — now get out before that guard finishes his loop."');
+  showLine('keycardPickup');
   return true;
 }
 
 function tryInteract() {
-  if (guardA.tryInteract(player.group.position)) return;
+  const guardAWasDown = guardA.down;
+  if (guardA.tryInteract(player.group.position)) {
+    if (!guardAWasDown && guardA.down) showLine('takedown', 4500);
+    return;
+  }
   tryPickupKeycard();
+}
+
+const GUARD_A_LINGER_RANGE = 4;
+const GUARD_A_LINGER_TIME = 1.2; // seconds of continuous proximity before the line fires
+let guardALingerTimer = 0;
+let hasWarnedGuardAPartner = false;
+
+function checkGuardAProximity(dt) {
+  if (hasWarnedGuardAPartner || guardA.down) return;
+
+  if (guardA.horizDistanceTo(player.group.position) <= GUARD_A_LINGER_RANGE) {
+    guardALingerTimer += dt;
+    if (guardALingerTimer >= GUARD_A_LINGER_TIME) {
+      hasWarnedGuardAPartner = true;
+      showLine('lingeringNearGuardA', 5000);
+    }
+  } else {
+    guardALingerTimer = 0; // wandered off, needs to linger again rather than just tick up forever
+  }
+}
+
+let hasEnteredOffices = false;
+function checkOfficesEntry() {
+  if (hasEnteredOffices || !officesBox) return;
+  if (officesBox.containsPoint(player.group.position)) {
+    hasEnteredOffices = true;
+    showLine('enterOffices', 5000);
+  }
 }
 
 function getInteractPrompt() {
@@ -287,7 +342,7 @@ function checkElevator(dt, elapsed) {
     game.onWin();
   } else if (elapsed - lastNoCardWarn > 2.5) {
     lastNoCardWarn = elapsed;
-    showSubtitle('"No card, no ride. Find it, fast!"', 2500);
+    showLine('elevatorNoCard', 2500);
   }
 }
 
@@ -299,6 +354,13 @@ function resetLevel() {
   game.alarmReason = null;
   game.levelComplete = false;
   game.escapeTimeRemaining = null;
+
+  // Per-attempt earpiece flags. hasPlayedIntro is deliberately NOT reset
+  // here, so the "you're in, stay low" line only plays once per session,
+  // not on every retry.
+  guardALingerTimer = 0;
+  hasWarnedGuardAPartner = false;
+  hasEnteredOffices = false;
 
   guardA.reset();
   guardB.reset();
@@ -425,6 +487,8 @@ function animate() {
     player.update(dt);
     guardA.update(dt);
     guardB.update(dt, player.group.position);
+    checkGuardAProximity(dt);
+    checkOfficesEntry();
     checkElevator(dt, elapsed);
   }
 
