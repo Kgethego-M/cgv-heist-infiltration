@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createLevel1 } from './levels/level1.js';
+import { createLevel1, ELEVATOR_IDLE_COLOR, ELEVATOR_ALARM_COLOR } from './levels/level1.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { GuardA, GuardB, loadGuardModel } from './ai/guards.js';
 import { Player, loadPlayerModel } from './player/player.js';
@@ -110,6 +110,7 @@ const game = {
 
     ambient.color.setHex(0x881111);
     scene.background.setHex(0x220000);
+    elevatorIndicatorMat.emissive.setHex(ELEVATOR_ALARM_COLOR);
 
     showLine(reason === 'partner_found' ? 'alarmPartnerFound' : 'alarmSpotted');
   },
@@ -128,6 +129,7 @@ const game = {
     if (this.levelComplete) return;
     this.levelComplete = true;
     controls.unlock();
+    doorAnim.opening = true;
 
     const secondsTaken = Math.floor((performance.now() - attemptStart) / 1000);
     const secondsLeft = Math.max(0, Math.ceil(this.escapeTimeRemaining ?? 0));
@@ -183,8 +185,31 @@ function restartFromEndScreen() {
 }
 
 // LEVEL
-const { root, colliders, elevatorPosition, keycardMesh, lightFixturePositions } = createLevel1(scene);
+const { root, colliders, elevatorPosition, elevatorDoors, elevatorIndicatorMat, keycardMesh, lightFixturePositions } = createLevel1(scene);
 addCeilingLights(lightFixturePositions);
+
+// Elevator door animation — advances every frame regardless of
+// game.levelComplete, since the whole point is that it keeps sliding open
+// AFTER the level is marked complete. resetLevel() snaps it back closed.
+const DOOR_OPEN_DURATION = 1.1; // seconds
+const doorAnim = { opening: false, t: 0 };
+function updateElevatorDoors(dt) {
+  if (!doorAnim.opening) return;
+  doorAnim.t = Math.min(doorAnim.t + dt / DOOR_OPEN_DURATION, 1);
+  const ease = 1 - Math.pow(1 - doorAnim.t, 3); // ease-out cubic
+  elevatorDoors.left.position.x = THREE.MathUtils.lerp(
+    elevatorDoors.closedX.left, elevatorDoors.openX.left, ease
+  );
+  elevatorDoors.right.position.x = THREE.MathUtils.lerp(
+    elevatorDoors.closedX.right, elevatorDoors.openX.right, ease
+  );
+}
+function resetElevatorDoors() {
+  doorAnim.opening = false;
+  doorAnim.t = 0;
+  elevatorDoors.left.position.x = elevatorDoors.closedX.left;
+  elevatorDoors.right.position.x = elevatorDoors.closedX.right;
+}
 
 // Earpiece audio: preload doesn't need a user gesture, only .play() does,
 // so this can fire immediately. Missing clips fail individually and just
@@ -414,6 +439,8 @@ function resetLevel() {
   ambient.color.setHex(0x1a1a2e);
   ambient.intensity = 0.6;
   scene.background.setHex(0x0a0a0a);
+  elevatorIndicatorMat.emissive.setHex(ELEVATOR_IDLE_COLOR);
+  resetElevatorDoors();
   clearTimeout(subtitleTimer);
   subtitleEl.style.display = 'none';
   promptEl.style.display = 'none';
@@ -542,6 +569,8 @@ function animate() {
     const promptText = (game.levelComplete || endScreenVisible()) ? null : getInteractPrompt();
   promptEl.textContent = promptText || '';
   promptEl.style.display = promptText ? 'block' : 'none';
+
+  updateElevatorDoors(dt);
 
   if (game.alarmActive && !game.levelComplete) {
     ambient.intensity = 0.4 + Math.abs(Math.sin(elapsed * 6)) * 0.5;

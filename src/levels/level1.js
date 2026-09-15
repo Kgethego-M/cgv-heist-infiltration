@@ -79,6 +79,86 @@ function makeFabricMap() {
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
+
+// Brushed steel for the elevator frame/doors — fine vertical streaks, the
+// same "procedural, no image files" approach as every other surface here.
+function makeBrushedMetalMap() {
+  const ctx = makeCanvas().getContext('2d');
+  ctx.fillStyle = '#9aa0a8';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let x = 0; x < 256; x++) {
+    const v = 140 + Math.floor(Math.random() * 45);
+    ctx.strokeStyle = `rgba(${v},${v + 4},${v + 8},0.35)`;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, 256);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(ctx.canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// LED-style floor readout above the elevator doors. Used as BOTH the colour
+// map and the emissive map on the same material (see makeElevator), so only
+// the drawn glyph glows — the black background stays dark like a real panel.
+function makeElevatorReadoutMap() {
+  const ctx = makeCanvas().getContext('2d');
+  ctx.fillStyle = '#050505';
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = '#3dff7a';
+  ctx.font = 'bold 120px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('L1', 128, 100);
+  ctx.beginPath();
+  ctx.moveTo(128, 150); ctx.lineTo(158, 190); ctx.lineTo(98, 190);
+  ctx.closePath();
+  ctx.fill(); // up-arrow
+  const tex = new THREE.CanvasTexture(ctx.canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Security keycard face — header bar, placeholder photo, printed "barcode"
+// lines, magnetic stripe. Drawn once, reused on the single card mesh.
+function makeKeycardMap() {
+  const ctx = makeCanvas().getContext('2d');
+  ctx.fillStyle = '#eceef2';
+  ctx.fillRect(0, 0, 256, 256);
+
+  ctx.fillStyle = '#1c3a5e';
+  ctx.fillRect(0, 0, 256, 60);
+  ctx.fillStyle = '#e8edf5';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('SECURITY ACCESS', 14, 38);
+
+  ctx.fillStyle = '#b7bcc4';
+  ctx.fillRect(16, 78, 70, 90); // photo placeholder
+  ctx.fillStyle = '#8a8f99';
+  ctx.beginPath();
+  ctx.arc(51, 108, 20, 0, Math.PI * 2);
+  ctx.fill(); // head silhouette
+  ctx.fillRect(31, 128, 40, 34); // shoulders silhouette
+
+  ctx.fillStyle = '#2a2f38';
+  ctx.font = '13px monospace';
+  ctx.fillText('CLEARANCE: L2', 100, 96);
+  ctx.fillText('ID  4471-B', 100, 116);
+  for (let i = 0; i < 8; i++) {
+    const w = 3 + Math.floor(Math.random() * 6);
+    ctx.fillRect(100 + i * 11, 132, w, 22); // barcode
+  }
+
+  ctx.fillStyle = '#111318';
+  ctx.fillRect(0, 210, 256, 30); // magnetic stripe
+
+  const tex = new THREE.CanvasTexture(ctx.canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 // Shared placeholder materials — swap these for real materials/textures later,
 // this is deliberately plain so it's obviously "blockout, not final"
 const floorMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
@@ -88,7 +168,6 @@ const markerMat = {
   player: new THREE.MeshStandardMaterial({ color: 0x33ff66, emissive: 0x33ff66, emissiveIntensity: 0.4 }),
   item: new THREE.MeshStandardMaterial({ color: 0xffcc00, emissive: 0xffcc00, emissiveIntensity: 0.5 }),
   furniture: new THREE.MeshStandardMaterial({ color: 0x8866aa }), // placeholder desks/cover
-  elevator: new THREE.MeshStandardMaterial({ color: 0x00ccff, emissive: 0x00ccff, emissiveIntensity: 0.45 }),
 };
 // The shared furniture material gets the laminate look. Colliders are
 // collected by MATERIAL IDENTITY (see traversal at the bottom), so we enrich
@@ -108,6 +187,34 @@ const woodMat = new THREE.MeshStandardMaterial({ map: makeWoodMap(), roughness: 
 const fabricMat = new THREE.MeshStandardMaterial({ map: makeFabricMap(), roughness: 0.95 });
 const darkPlasticMat = new THREE.MeshStandardMaterial({ color: 0x1c1c22, roughness: 0.6 });
 const metalMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.35, metalness: 0.8 });
+
+// Elevator frame/doors — one shared brushed-metal material and texture.
+const brushedMetalMap = makeBrushedMetalMap();
+const elevatorMetalMat = new THREE.MeshStandardMaterial({
+  map: brushedMetalMap, color: 0xffffff, roughness: 0.4, metalness: 0.75,
+});
+
+// Readout material uses the SAME canvas texture as both map and emissiveMap
+// (see makeElevatorReadoutMap) so only the drawn glyph glows, not the panel.
+// main.js flips `.emissive` between these two colours on alarm/reset — kept
+// here so both files agree on exactly what "idle" and "alarm" look like.
+export const ELEVATOR_IDLE_COLOR = 0x1f8f4a;
+export const ELEVATOR_ALARM_COLOR = 0xcc2222;
+const elevatorReadoutMap = makeElevatorReadoutMap();
+const elevatorIndicatorMat = new THREE.MeshStandardMaterial({
+  map: elevatorReadoutMap,
+  emissive: ELEVATOR_IDLE_COLOR,
+  emissiveMap: elevatorReadoutMap,
+  emissiveIntensity: 1.1,
+});
+
+// Keycard face + the small emissive RFID chip in its corner.
+const keycardMat = new THREE.MeshStandardMaterial({
+  map: makeKeycardMap(), roughness: 0.35, emissive: 0x2c4f78, emissiveIntensity: 0.15,
+});
+const keycardChipMat = new THREE.MeshStandardMaterial({
+  color: 0xd9b34d, emissive: 0xd9b34d, emissiveIntensity: 0.9, roughness: 0.3, metalness: 0.6,
+});
 
 // Shared prop geometries — created ONCE, reused by every cubicle/desk
 // (brief 6.1: reuse instead of creating a new geometry per object).
@@ -271,6 +378,96 @@ function makeManagerDesk() {
   return desk;
 }
 
+// A real elevator: brushed-metal frame + two sliding door leaves + a lit
+// LED floor readout + a call button. Doors are closed by default — main.js
+// slides them open on game.onWin() and resets them on resetLevel(). Nothing
+// here is a collider (all-new dedicated materials), matching every other
+// marker/prop convention in this file.
+function makeElevator(pos) {
+  const group = new THREE.Group();
+  group.name = 'furniture_elevator';
+
+  const wallZ = pos.z - 1; // flush with the Lobby's front wall (z = -5)
+  const doorLeafWidth = 1.0;
+  const doorLeafHeight = 2.6;
+  const closedX = { left: pos.x - doorLeafWidth / 2, right: pos.x + doorLeafWidth / 2 };
+  // Slide fully behind the jambs on open — see the comment on jambs below
+  // for why this is a deliberate simplification rather than a real pocket.
+  const openX = { left: closedX.left - doorLeafWidth, right: closedX.right + doorLeafWidth };
+
+  const doorGeom = new THREE.BoxGeometry(doorLeafWidth, doorLeafHeight, 0.12);
+  const doorLeft = new THREE.Mesh(doorGeom, elevatorMetalMat);
+  doorLeft.position.set(closedX.left, doorLeafHeight / 2, wallZ);
+  doorLeft.name = 'elevatorDoorLeft';
+  group.add(doorLeft);
+
+  const doorRight = new THREE.Mesh(doorGeom, elevatorMetalMat);
+  doorRight.position.set(closedX.right, doorLeafHeight / 2, wallZ);
+  doorRight.name = 'elevatorDoorRight';
+  group.add(doorRight);
+
+  // Side jambs — sit just outside the doors' closed edges. Real elevators
+  // hide open doors in a wall pocket; we don't model one, so the leaves
+  // visibly slide past the jambs rather than vanishing into them. Cheap and
+  // reads fine in motion; flag if you want a proper pocket cutout later.
+  const jambGeom = new THREE.BoxGeometry(0.25, 3.4, 0.3);
+  const jambLeft = new THREE.Mesh(jambGeom, elevatorMetalMat);
+  jambLeft.position.set(pos.x - 1.25, 1.7, wallZ);
+  group.add(jambLeft);
+  const jambRight = new THREE.Mesh(jambGeom, elevatorMetalMat);
+  jambRight.position.set(pos.x + 1.25, 1.7, wallZ);
+  group.add(jambRight);
+
+  const header = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.4, 0.3), elevatorMetalMat);
+  header.position.set(pos.x, 2.8, wallZ);
+  group.add(header);
+
+  // LED readout, mounted on the header's room-facing side.
+  const readout = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.22), elevatorIndicatorMat);
+  readout.position.set(pos.x, 2.8, wallZ + 0.16);
+  readout.name = 'elevatorIndicator';
+  group.add(readout);
+
+  // Call button — decorative (always "powered"), sits beside the frame.
+  const buttonPlate = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.2, 0.04), darkPlasticMat);
+  buttonPlate.position.set(pos.x - 1.45, 1.2, wallZ + 0.16);
+  group.add(buttonPlate);
+  const buttonLight = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.045, 0.045, 0.02, 16),
+    new THREE.MeshStandardMaterial({ color: 0xfff2c4, emissive: 0xfff2c4, emissiveIntensity: 0.8 })
+  );
+  buttonLight.rotation.x = Math.PI / 2;
+  buttonLight.position.set(pos.x - 1.45, 1.24, wallZ + 0.19);
+  group.add(buttonLight);
+
+  // Low metal threshold instead of a glowing floor pad — subtler, reads as
+  // "step here" without looking like a UI marker.
+  const threshold = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.03, 0.4), elevatorMetalMat);
+  threshold.position.set(pos.x, 0.015, pos.z);
+  group.add(threshold);
+
+  return { group, doorLeft, doorRight, closedX, openX, indicatorMat: elevatorIndicatorMat };
+}
+
+// The keycard itself — a flat card lying on the desk with a printed face
+// texture and a small glowing RFID chip, instead of a floating marker
+// sphere. Kept as a Group so main.js's `.position` / `.visible` calls work
+// exactly as before — no changes needed on the main.js side for this swap.
+function makeKeycard(x, y, z) {
+  const group = new THREE.Group();
+  group.name = 'marker_item';
+  group.position.set(x, y, z);
+
+  const card = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.015, 0.14), keycardMat);
+  group.add(card);
+
+  const chip = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.004, 12), keycardChipMat);
+  chip.position.set(0.07, 0.011, -0.04);
+  group.add(chip);
+
+  return group;
+}
+
 export function createLevel1(scene) {
   const level1 = new THREE.Group();
   level1.name = 'Level1';
@@ -302,23 +499,13 @@ export function createLevel1(scene) {
   // Player spawn / hiding spot, behind pillar1
   lobby.add(makeMarker('player', -4, 0.4, -3.8, 0.3));
 
-  // PLACEHOLDER: extraction elevator — front-right corner of the Lobby, away
-  // from spawn/reception so it doesn't crowd the sneak-in path. Position is
+  // Extraction elevator — front-right corner of the Lobby, away from
+  // spawn/reception so it doesn't crowd the sneak-in path. Position is
   // returned below so main.js can do the win-check distance test without
   // hardcoding a duplicate copy of these coordinates.
   const ELEVATOR_POS = new THREE.Vector3(5, 0, -4);
-  const elevatorPad = new THREE.Mesh(new THREE.BoxGeometry(2, 0.1, 2), markerMat.elevator);
-  elevatorPad.position.set(ELEVATOR_POS.x, 0.05, ELEVATOR_POS.z);
-  elevatorPad.name = 'marker_elevator';
-  lobby.add(elevatorPad);
-
-  // Door panel just behind the pad, flush with the front wall — purely
-  // visual, not a collider (elevator marker material is excluded from the
-  // collider traversal below, same as every other marker).
-  const elevatorDoor = new THREE.Mesh(new THREE.BoxGeometry(2, 3, 0.15), markerMat.elevator);
-  elevatorDoor.position.set(ELEVATOR_POS.x, 1.5, ELEVATOR_POS.z - 1);
-  elevatorDoor.name = 'marker_elevator_door';
-  lobby.add(elevatorDoor);
+  const elevator = makeElevator(ELEVATOR_POS);
+  lobby.add(elevator.group);
 
   lobby.add(makeCeiling(12, 10, 0, CEILING_HEIGHT, 0));
   [[-3, -2.5], [3, -2.5], [-3, 2.5], [3, 2.5]].forEach(([x, z]) => {
@@ -377,7 +564,7 @@ export function createLevel1(scene) {
   // PLACEHOLDER: manager's desk with the keycard on top
     mgrOffice.add(makeManagerDesk());
 
-  const keycardMesh = makeMarker('item', 5, 1.15, 19, 0.25); // the keycard itself
+  const keycardMesh = makeKeycard(5, 1.15, 19); // the keycard itself
   mgrOffice.add(keycardMesh);
 
   offices.add(makeCeiling(14, 10, 0, CEILING_HEIGHT, 16));
@@ -410,6 +597,8 @@ export function createLevel1(scene) {
     root: level1,
     colliders,
     elevatorPosition: ELEVATOR_POS,
+    elevatorDoors: { left: elevator.doorLeft, right: elevator.doorRight, closedX: elevator.closedX, openX: elevator.openX },
+    elevatorIndicatorMat: elevator.indicatorMat,
     keycardMesh,
     lightFixturePositions,
   };
