@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { createLevel1, ELEVATOR_IDLE_COLOR, ELEVATOR_ALARM_COLOR } from './levels/level1.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-import { GuardA, GuardB, loadGuardModel } from './ai/guards.js';
+import { GuardA, GuardB, loadGuardModel, getGuardTemplate } from './ai/guards.js';
 import { Player, loadPlayerModel } from './player/player.js';
 import { loadEarpieceAudio, playLine } from './audio/earpiece.js';
 
@@ -420,15 +420,21 @@ function tryPickupKeycard() {
   return true;
 }
 
+let playerIsDisguised = false;
+
 function tryInteract() {
   const guardAWasDown = guardA.down;
   if (guardA.tryInteract(player.group.position)) {
     if (!guardAWasDown && guardA.down) showLine('takedown', 4500);
+    if (guardA.looted && !playerIsDisguised) {
+      player.setDisguised(true, getGuardTemplate());
+      playerIsDisguised = true;
+      showSubtitle('Uniform acquired — Guard B\'s vision is reduced.', 3000);
+    }
     return;
   }
   tryPickupKeycard();
 }
-
 const GUARD_A_LINGER_RANGE = 4;
 const GUARD_A_LINGER_TIME = 1.2; // seconds of continuous proximity before the line fires
 let guardALingerTimer = 0;
@@ -492,6 +498,8 @@ function checkElevator(dt, elapsed) {
 function resetLevel() {
   game.guardADown = false;
   game.hasDisguise = false;
+  playerIsDisguised = false;
+  player.setDisguised(false);
   game.hasKeycard = false;
   game.alarmActive = false;
   game.alarmReason = null;

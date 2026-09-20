@@ -20,7 +20,11 @@ export async function loadGuardModel(url = './assets/models/guard_character.glb'
 
   return guardTemplate;
 }
-
+// Returns the loaded guard template so other systems (e.g. player disguise)
+// can clone the guard model. Returns null if not loaded yet.
+export function getGuardTemplate() {
+  return guardTemplate;
+}
 // Builds one independent, animatable copy of the shared template.
 // Falls back to the old placeholder capsule if the model hasn't loaded yet,
 // so a missing/failed load doesn't silently crash guard creation.
@@ -124,22 +128,16 @@ export class GuardA {
   takeDown() {
     this.down = true;
     this.game.guardADown = true;
-    this.group.rotation.y = this.baseRotation; // stop the idle sway first
-
+    // Stop idle sway and rotation
+    this.group.rotation.y = this.baseRotation;
+    // Rotate the body mesh itself to lie flat on the ground
+    if (this.body) {
+      this.body.rotation.x = -Math.PI / 2; // tip forward onto front
+      this.body.position.y = 0.3; // lower so it sits on floor
+    }
+    // Also stop any playing animation
     if (this.mixer) {
-      playAction(this, 'Die', 0.15);
-      const dieAction = this.actions['Die'];
-      if (dieAction) {
-        // Play once and freeze on the final frame — a death/knockdown pose
-        // shouldn't loop back to the start.
-        dieAction.setLoop(THREE.LoopOnce);
-        dieAction.clampWhenFinished = true;
-      }
-    } else {
-      // Placeholder capsule fallback — no real model loaded yet, keep the
-      // old manual tip-over so something still visibly happens.
-      this.group.rotation.z = Math.PI / 2;
-      this.body.position.y = 1.2;
+      this.mixer.stopAllAction();
     }
   }
 
