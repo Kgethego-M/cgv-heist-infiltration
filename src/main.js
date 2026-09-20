@@ -224,7 +224,7 @@ const officesGroup = root.getObjectByName('Offices');
 const officesBox = officesGroup ? new THREE.Box3().setFromObject(officesGroup) : null;
 
 // Wall collision — one expanded bounding box per collider, computed ONCE.
-const PLAYER_RADIUS = 0.35; // slightly tighter than before — 0.4 felt too generous
+const PLAYER_RADIUS = 0.5; // slightly tighter than before — 0.4 felt too generous
 const _testPoint = new THREE.Vector3();
 const colliderBoxes = colliders.map((mesh) => {
   const box = new THREE.Box3().setFromObject(mesh);
@@ -578,7 +578,7 @@ function updateCamera() {
     _camRaycaster.far = camDist;
     const hits = _camRaycaster.intersectObjects(colliders, false);
     if (hits.length > 0) {
-      const safeDist = Math.max(hits[0].distance - 0.2, 0.3);
+      const safeDist = Math.max(hits[0].distance - 0.2, 1.3);
       _desiredCamPos.copy(_camPivot).addScaledVector(_camDir, safeDist);
     }
   }
