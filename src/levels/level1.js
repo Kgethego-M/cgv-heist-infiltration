@@ -496,8 +496,8 @@ export function createLevel1(scene) {
     lobby.add(makeCoverPillar());
 
   
-  // Player spawn / hiding spot, behind pillar1
-  lobby.add(makeMarker('player', -4, 0.4, -3.8, 0.3));
+  // Player spawn point is now just the coordinate main.js uses — the real
+  // player model stands here, so the old placeholder marker sphere is gone.
 
   // Extraction elevator — front-right corner of the Lobby, away from
   // spawn/reception so it doesn't crowd the sneak-in path. Position is
@@ -580,7 +580,7 @@ export function createLevel1(scene) {
   offices.add(mgrOffice);
   level1.add(offices);
 
-    // Everything that can block Guard B's line of sight. All walls share wallMat
+  // Everything that can block Guard B's line of sight. All walls share wallMat
   // and all placeholder furniture shares markerMat.furniture, so one traversal
   // collects them. The guard/player/keycard markers use the other materials,
   // so they are excluded automatically (markers must NOT block vision).

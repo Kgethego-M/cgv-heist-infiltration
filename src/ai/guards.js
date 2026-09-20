@@ -124,12 +124,23 @@ export class GuardA {
   takeDown() {
     this.down = true;
     this.game.guardADown = true;
-    this.mixer?.stopAllAction(); // freeze the animated pose rather than fight it below
-    this.group.rotation.y = this.baseRotation;
-    this.group.rotation.z = Math.PI / 2;
-    // NOTE: with the real model this offset may need retuning by eye once you
-    // see it in-game — the old capsule math for this doesn't carry over cleanly.
-    this.body.position.y = 1.2;
+    this.group.rotation.y = this.baseRotation; // stop the idle sway first
+
+    if (this.mixer) {
+      playAction(this, 'Die', 0.15);
+      const dieAction = this.actions['Die'];
+      if (dieAction) {
+        // Play once and freeze on the final frame — a death/knockdown pose
+        // shouldn't loop back to the start.
+        dieAction.setLoop(THREE.LoopOnce);
+        dieAction.clampWhenFinished = true;
+      }
+    } else {
+      // Placeholder capsule fallback — no real model loaded yet, keep the
+      // old manual tip-over so something still visibly happens.
+      this.group.rotation.z = Math.PI / 2;
+      this.body.position.y = 1.2;
+    }
   }
 
   loot() {
@@ -155,6 +166,10 @@ export class GuardB {
     this.colliders = colliders;
     this.game = game;
     this.partnerCheckIndex = options.partnerCheckIndex ?? -1;
+    // Reuses the exact same collision system as the player (same colliders,
+    // same boxes) rather than duplicating it here. Falls back to "never
+    // blocked" if main.js doesn't pass one, so nothing breaks if omitted.
+    this.checkCollision = options.checkCollision || (() => false);
 
     this.state = 'patrol';
     this.speed = 0.65;
@@ -170,6 +185,11 @@ export class GuardB {
     this.checkInterval = 0.1;
     this.checkTimer = 0;
     this.catchDistance = 1.2;
+
+    // Stuck-recovery: straight-line steering has no pathfinding, so he can
+    // wedge against a wall corner or furniture edge. Not real navigation —
+    // just a fallback so he doesn't freeze in place when that happens.
+    this._stuckTime = 0;
 
     this._dir = new THREE.Vector3();
     this._toPlayer = new THREE.Vector3();
@@ -239,7 +259,25 @@ export class GuardB {
     this._dir.y = 0;
     if (this._dir.length() > 0.15) {
       this._dir.normalize();
-      this.group.position.addScaledVector(this._dir, this.speed * dt);
+      const step = this.speed * dt;
+      const nextX = this.group.position.x + this._dir.x * step;
+      const nextZ = this.group.position.z + this._dir.z * step;
+      const blockedX = this.checkCollision(nextX, this.group.position.z);
+      const blockedZ = this.checkCollision(this.group.position.x, nextZ);
+      if (!blockedX) this.group.position.x = nextX;
+      if (!blockedZ) this.group.position.z = nextZ;
+
+      this._stuckTime = (blockedX && blockedZ) ? this._stuckTime + dt : 0;
+      if (this._stuckTime > 0.4) {
+        // Fully wedged — sidestep 90° from his intended direction until clear
+        const perpX = this._dir.z;
+        const perpZ = -this._dir.x;
+        const sideX = this.group.position.x + perpX * step;
+        const sideZ = this.group.position.z + perpZ * step;
+        if (!this.checkCollision(sideX, this.group.position.z)) this.group.position.x = sideX;
+        if (!this.checkCollision(this.group.position.x, sideZ)) this.group.position.z = sideZ;
+      }
+
       this.group.rotation.y = Math.atan2(this._dir.x, this._dir.z);
     } else {
       this.arriveAtWaypoint();
@@ -284,7 +322,24 @@ export class GuardB {
       return;
     }
     this._dir.normalize();
-    this.group.position.addScaledVector(this._dir, this.chaseSpeed * dt);
+    const step = this.chaseSpeed * dt;
+    const nextX = this.group.position.x + this._dir.x * step;
+    const nextZ = this.group.position.z + this._dir.z * step;
+    const blockedX = this.checkCollision(nextX, this.group.position.z);
+    const blockedZ = this.checkCollision(this.group.position.x, nextZ);
+    if (!blockedX) this.group.position.x = nextX;
+    if (!blockedZ) this.group.position.z = nextZ;
+
+    this._stuckTime = (blockedX && blockedZ) ? this._stuckTime + dt : 0;
+    if (this._stuckTime > 0.4) {
+      const perpX = this._dir.z;
+      const perpZ = -this._dir.x;
+      const sideX = this.group.position.x + perpX * step;
+      const sideZ = this.group.position.z + perpZ * step;
+      if (!this.checkCollision(sideX, this.group.position.z)) this.group.position.x = sideX;
+      if (!this.checkCollision(this.group.position.x, sideZ)) this.group.position.z = sideZ;
+    }
+
     this.group.rotation.y = Math.atan2(this._dir.x, this._dir.z);
   }
 
@@ -293,6 +348,7 @@ export class GuardB {
     this.index = 0;
     this.pauseTimer = 0;
     this.checkTimer = 0;
+    this._stuckTime = 0;
     this.group.position.copy(this.waypoints[0]);
     this.faceWaypoint(1);
     if (this.mixer) playAction(this, 'Idle');

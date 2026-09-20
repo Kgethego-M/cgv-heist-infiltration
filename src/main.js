@@ -28,16 +28,8 @@ const controls = new PointerLockControls(camera, renderer.domElement);
 const blocker = document.getElementById('blocker');
 blocker.addEventListener('click', () => controls.lock());
 
-// The very first lock is also the first real user gesture on the page,
-// which is the necessary place (per browser autoplay rules) to kick off
-// the intro earpiece line.
-let hasPlayedIntro = false;
 controls.addEventListener('lock', () => {
   blocker.style.display = 'none';
-  if (!hasPlayedIntro) {
-    hasPlayedIntro = true;
-    showLine('levelStart', 6000);
-  }
 });
 controls.addEventListener('unlock', () => (blocker.style.display = 'flex'));
 
@@ -86,6 +78,16 @@ const endScreenEl = document.getElementById('endScreen');
 const endTitleEl = document.getElementById('endTitle');
 const endMessageEl = document.getElementById('endMessage');
 endScreenEl.addEventListener('click', restartFromEndScreen);
+
+// MAIN MENU + INTRO — mainMenu is visible from page load (plain HTML/CSS,
+// no dependency on models being loaded yet). The Start button itself only
+// gets its click handler once the player/guards actually exist further
+// down this file, since top-level await blocks everything after it until
+// the models finish loading.
+const mainMenuEl = document.getElementById('mainMenu');
+const startBtn = document.getElementById('startBtn');
+let inMenu = true;
+let introPlaying = false;
 
 const ESCAPE_TIME_LIMIT = 25;
 const ELEVATOR_REACH_DISTANCE = 1.8;
@@ -259,7 +261,64 @@ const waypoints = [
   new THREE.Vector3(0, 0, 10.2),
   new THREE.Vector3(0, 0, 8),
 ];
-const guardB = new GuardB(scene, waypoints, colliders, game, { partnerCheckIndex: 3 });
+const guardB = new GuardB(scene, waypoints, colliders, game, { partnerCheckIndex: 3, checkCollision });
+
+// Menu is ready once the player actually exists — enable Start now.
+startBtn.disabled = false;
+startBtn.style.opacity = '1';
+startBtn.textContent = 'Start Mission';
+startBtn.addEventListener('click', () => {
+  mainMenuEl.style.display = 'none';
+  inMenu = false;
+  controls.lock(); // this click is the required user gesture for both pointer lock and audio
+  playIntroSequence();
+});
+
+// MENU CAMERA — slow orbit around the player while the menu is up. Reuses
+// the same scene/player/renderer, no separate mini-scene needed.
+const MENU_ORBIT_RADIUS = 2.5;
+const MENU_ORBIT_SPEED = 0.3;
+const _menuLookTarget = new THREE.Vector3();
+
+function updateMenuCamera(elapsed) {
+  const angle = elapsed * MENU_ORBIT_SPEED;
+  camera.position.set(
+    player.group.position.x + Math.sin(angle) * MENU_ORBIT_RADIUS,
+    player.group.position.y + 1.5,
+    player.group.position.z + Math.cos(angle) * MENU_ORBIT_RADIUS
+  );
+  _menuLookTarget.copy(player.group.position);
+  _menuLookTarget.y += 1.0;
+  camera.lookAt(_menuLookTarget);
+}
+
+// INTRO — a short scripted flythrough from the entrance down into the
+// Lobby, handing off to the player right as the "you're in" earpiece line
+// plays. Tune the start/end points by eye once you see it in-game.
+const INTRO_DURATION = 4;
+let introStartTime = 0;
+const introCamStart = new THREE.Vector3(10, 8, -10);
+const introCamEnd = new THREE.Vector3(-2, 3, -1);
+const introLookStart = new THREE.Vector3(0, 0, 0);
+const introLookEnd = new THREE.Vector3(-4, 1, -4);
+const _introLook = new THREE.Vector3();
+
+function playIntroSequence() {
+  introPlaying = true;
+  introStartTime = clock.elapsedTime;
+}
+
+function updateIntro(elapsed) {
+  const t = Math.min((elapsed - introStartTime) / INTRO_DURATION, 1);
+  const eased = t * t * (3 - 2 * t); // smoothstep
+  camera.position.lerpVectors(introCamStart, introCamEnd, eased);
+  _introLook.lerpVectors(introLookStart, introLookEnd, eased);
+  camera.lookAt(_introLook);
+  if (t >= 1) {
+    introPlaying = false;
+    showLine('levelStart', 6000);
+  }
+}
 
 // CAMERA MODES
 const CAMERA_MODE = { FIRST: 'first', THIRD: 'third' };
@@ -555,7 +614,13 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.elapsedTime;
 
-    if (!game.levelComplete && !endScreenVisible()) {
+    if (inMenu) {
+    updateMenuCamera(elapsed);
+    player.update(dt);
+  } else if (introPlaying) {
+    updateIntro(elapsed);
+    player.update(dt);
+  } else if (!game.levelComplete && !endScreenVisible()) {
     updateMovement(dt);
     updateCamera();
     player.update(dt);
@@ -566,11 +631,11 @@ function animate() {
     checkElevator(dt, elapsed);
   }
 
-    const promptText = (game.levelComplete || endScreenVisible()) ? null : getInteractPrompt();
+    const promptText = (inMenu || introPlaying || game.levelComplete || endScreenVisible()) ? null : getInteractPrompt();
   promptEl.textContent = promptText || '';
   promptEl.style.display = promptText ? 'block' : 'none';
 
-  updateElevatorDoors(dt);
+  if (!inMenu) updateElevatorDoors(dt);
 
   if (game.alarmActive && !game.levelComplete) {
     ambient.intensity = 0.4 + Math.abs(Math.sin(elapsed * 6)) * 0.5;
