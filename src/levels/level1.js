@@ -580,19 +580,22 @@ export function createLevel1(scene) {
   offices.add(mgrOffice);
   level1.add(offices);
 
-  // Everything that can block Guard B's line of sight. All walls share wallMat
-  // and all placeholder furniture shares markerMat.furniture, so one traversal
-  // collects them. The guard/player/keycard markers use the other materials,
-  // so they are excluded automatically (markers must NOT block vision).
-  const colliders = [];
-  level1.traverse((obj) => {
-    if (obj.isMesh && (obj.material === wallMat || obj.material === markerMat.furniture)) {
-      colliders.push(obj);
-    }
-  });
-   
+scene.add(level1);
 
-  scene.add(level1);
+const colliders = [];
+level1.traverse((obj) => {
+  if (!obj.isMesh) return;
+  // Collect ALL solid meshes except floor, ceiling, lights, and elevator
+  const name = obj.name.toLowerCase();
+  if (name.includes('floor') || name.includes('ceiling') || 
+      name.includes('light') || name.includes('elevator')) return;
+  // Also skip if material is clearly non-solid (glass, emissive-only)
+  if (obj.material && obj.material.transparent) return;
+  colliders.push(obj);
+});
+
+console.log('Total colliders collected:', colliders.length);
+
   return {
     root: level1,
     colliders,

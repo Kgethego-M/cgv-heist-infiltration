@@ -223,22 +223,37 @@ loadEarpieceAudio();
 const officesGroup = root.getObjectByName('Offices');
 const officesBox = officesGroup ? new THREE.Box3().setFromObject(officesGroup) : null;
 
-// Wall collision — one expanded bounding box per collider, computed ONCE.
-const PLAYER_RADIUS = 0.5; // slightly tighter than before — 0.4 felt too generous
-const _testPoint = new THREE.Vector3();
-const colliderBoxes = colliders.map((mesh) => {
-  const box = new THREE.Box3().setFromObject(mesh);
-  box.expandByScalar(PLAYER_RADIUS);
-  return box;
-});
+
+// Wall collision via raycasting — computed after first render so world matrices are current.
+const PLAYER_RADIUS = 0.35;
+const _collisionRaycaster = new THREE.Raycaster();
+const _collisionDir = new THREE.Vector3();
+const _collisionOrigin = new THREE.Vector3();
+let colliderMeshes = [];
 function checkCollision(x, z) {
-  _testPoint.set(x, 0.9, z);
-  for (let i = 0; i < colliderBoxes.length; i++) {
-    if (colliderBoxes[i].containsPoint(_testPoint)) return true;
+  // Check a circle of points around (x, z) to account for player body radius
+  const offsets = [
+    [0, 0],
+    [PLAYER_RADIUS, 0], [-PLAYER_RADIUS, 0],
+    [0, PLAYER_RADIUS], [0, -PLAYER_RADIUS],
+    [PLAYER_RADIUS * 0.7, PLAYER_RADIUS * 0.7],
+    [PLAYER_RADIUS * 0.7, -PLAYER_RADIUS * 0.7],
+    [-PLAYER_RADIUS * 0.7, PLAYER_RADIUS * 0.7],
+    [-PLAYER_RADIUS * 0.7, -PLAYER_RADIUS * 0.7],
+  ];
+  const heights = [0.3, 0.9, 1.5];
+  
+  for (let [ox, oz] of offsets) {
+    for (let h of heights) {
+      const testPoint = new THREE.Vector3(x + ox, h, z + oz);
+      for (let i = 0; i < colliders.length; i++) {
+        const box = new THREE.Box3().setFromObject(colliders[i]);
+        if (box.containsPoint(testPoint)) return true;
+      }
+    }
   }
   return false;
 }
-
 const PLAYER_SPAWN = new THREE.Vector3(-4, 0, -4.3);
 
 // PLAYER + GUARDS
@@ -519,13 +534,13 @@ function updateMovement(dt) {
     updateWallHug(dt);
     return;
   } else if (isWallHugging) {
-    isWallHugging = false; // Q released — resume normal movement next frame
+    isWallHugging = false;
   }
 
   camera.getWorldDirection(_camForward);
   _camForward.y = 0;
   _camForward.normalize();
-  _camRight.set(-_camForward.z, 0, _camForward.x); // fixed: was inverted before
+  _camRight.set(-_camForward.z, 0, _camForward.x);
 
   _moveDir.set(0, 0, 0);
   if (keys['w']) _moveDir.add(_camForward);
@@ -541,15 +556,33 @@ function updateMovement(dt) {
     _moveDir.normalize();
     const speed = isProne ? PRONE_SPEED : isCrouching ? CROUCH_SPEED : isSprinting ? SPRINT_SPEED : WALK_SPEED;
 
-    const nextX = player.group.position.x + _moveDir.x * speed * dt;
-    const nextZ = player.group.position.z + _moveDir.z * speed * dt;
-    if (!checkCollision(nextX, player.group.position.z)) player.group.position.x = nextX;
-    if (!checkCollision(player.group.position.x, nextZ)) player.group.position.z = nextZ;
+    const prevX = player.group.position.x;
+    const prevZ = player.group.position.z;
 
-    player.group.rotation.y = Math.atan2(_moveDir.x, _moveDir.z);
+    const nextX = prevX + _moveDir.x * speed * dt;
+    const nextZ = prevZ + _moveDir.z * speed * dt;
+    const xBlocked = checkCollision(nextX, prevZ);
+    const zBlocked = checkCollision(player.group.position.x, nextZ);
+    
+    // If either direction is blocked, don't move at all (no wall sliding through furniture)
+    if (!xBlocked && !zBlocked) {
+      player.group.position.x = nextX;
+      player.group.position.z = nextZ;
+    }
+    
+    console.log('x:', prevX.toFixed(2), '→', player.group.position.x.toFixed(2), 
+      (xBlocked ? ' BLOCKED' : ' OK'), '| z:', prevZ.toFixed(2), '→', player.group.position.z.toFixed(2),
+      (zBlocked ? ' BLOCKED' : ' OK'));
 
-    const clip = isProne ? 'Crawl' : isCrouching ? 'LowWalk' : isSprinting ? 'Sprint' : 'Walking';
-    player.playAction(clip);
+    const actuallyMoved = player.group.position.x !== prevX || player.group.position.z !== prevZ;
+
+    if (actuallyMoved) {
+      player.group.rotation.y = Math.atan2(_moveDir.x, _moveDir.z);
+      const clip = isProne ? 'Crawl' : isCrouching ? 'LowWalk' : isSprinting ? 'Sprint' : 'Walking';
+      player.playAction(clip);
+    } else {
+      player.playAction('Idle');
+    }
   } else {
     player.playAction('Idle');
   }
@@ -582,6 +615,9 @@ function updateCamera() {
       _desiredCamPos.copy(_camPivot).addScaledVector(_camDir, safeDist);
     }
   }
+    // DEBUG: log camera position every frame
+  console.log('CAM pos:', _desiredCamPos.x.toFixed(2), _desiredCamPos.z.toFixed(2), '| PLAYER pos:', player.group.position.x.toFixed(2), player.group.position.z.toFixed(2));
+  camera.position.copy(_desiredCamPos);
 
   camera.position.copy(_desiredCamPos);
 }
@@ -610,6 +646,11 @@ function updateMinimap() {
 const clock = new THREE.Clock();
 
 function animate() {
+    // Populate collider meshes on first frame when world matrices are current
+  if (colliderMeshes.length === 0 && colliders.length > 0) {
+    colliderMeshes = colliders.slice();
+    console.log('colliderMeshes populated:', colliderMeshes.length);
+  }
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.elapsedTime;
