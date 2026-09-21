@@ -20,8 +20,7 @@ export async function loadGuardModel(url = './assets/models/guard_character.glb'
 
   return guardTemplate;
 }
-// Returns the loaded guard template so other systems (e.g. player disguise)
-// can clone the guard model. Returns null if not loaded yet.
+// Returns the loaded guard template so other systems can clone the guard model. Returns null if not loaded yet.
 export function getGuardTemplate() {
   return guardTemplate;
 }
@@ -64,7 +63,8 @@ function playAction(entity, name, fadeTime = 0.25) {
   entity.currentAction = next;
 }
 
-// GUARD A — stationary at the reception desk. Takedown + uniform loot target.
+// GUARD A — stationary at the reception desk. Takedown target; carries the
+// key to the Manager's Office.
 export class GuardA {
   constructor(scene, game, position) {
     this.game = game;
@@ -148,7 +148,7 @@ export class GuardA {
 
     reset() {
     this.down = false;
-    this.looted = false;
+    this.hasKey = false; // without this, the key can never be taken again after a retry
     this.idleTime = 0;
     this.group.rotation.z = 0;
     this.group.rotation.y = this.baseRotation;
@@ -188,7 +188,6 @@ export class GuardB {
     this.pauseTimer = 0;
 
     this.visionRange = 9;
-    this.visionRangeDisguised = 4;
     this.visionHalfAngle = THREE.MathUtils.degToRad(50);
     this.closeRange = 2.5;
     this.checkInterval = 0.1;
@@ -305,8 +304,7 @@ export class GuardB {
     this._toPlayer.subVectors(playerPos, this.group.position);
     this._toPlayer.y = 0;
     const dist = this._toPlayer.length();
-    const range = this.game.hasDisguise ? this.visionRangeDisguised : this.visionRange;
-    const withinRange = dist < range;
+    const withinRange = dist < this.visionRange;
     const tooClose = dist < this.closeRange;
     if (!withinRange && !tooClose) return false;
 

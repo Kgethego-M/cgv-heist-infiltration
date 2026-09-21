@@ -19,7 +19,7 @@ const LINES = {
     file: 'takedown.mp3',
   },
   enterOffices: {
-    text: "The keycard is in the manager's office. You'll need to find a way in.",
+    text: '"The keycard is in the manager\u2019s office. That door will be locked \u2014 you\u2019ll need the guard\u2019s key."',
     file: 'enter-offices.mp3',
   },
   keycardPickup: {

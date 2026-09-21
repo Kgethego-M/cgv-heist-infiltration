@@ -411,7 +411,47 @@ function distanceXZ(a, b) {
   _distTmp.set(b.x - a.x, 0, b.z - a.z);
   return _distTmp.length();
 }
+// ---- Manager's office door ----------------------------------------------
+const OFFICE_DOOR_CLOSED_X = 5;
+const OFFICE_DOOR_OPEN_X = 6.2;     // slides along the inside of the wall beside the doorway
+const OFFICE_DOOR_SLIDE_TIME = 0.6; // seconds
 let officeDoorUnlocked = false;
+const officeDoorAnim = { opening: false, t: 0 };
+// Distance checks use the CLOSED position so the prompt doesn't drift as the door slides.
+const officeDoorSpot = { x: OFFICE_DOOR_CLOSED_X, z: officeDoor.position.z };
+
+function nearOfficeDoor() {
+  return !officeDoorUnlocked && distanceXZ(player.group.position, officeDoorSpot) <= OFFICE_DOOR_INTERACT_DISTANCE;
+}
+
+function updateOfficeDoor(dt) {
+  if (!officeDoorAnim.opening) return;
+  officeDoorAnim.t = Math.min(officeDoorAnim.t + dt / OFFICE_DOOR_SLIDE_TIME, 1);
+  const ease = 1 - Math.pow(1 - officeDoorAnim.t, 3); // ease-out cubic
+  officeDoor.position.x = OFFICE_DOOR_CLOSED_X + (OFFICE_DOOR_OPEN_X - OFFICE_DOOR_CLOSED_X) * ease;
+  if (officeDoorAnim.t >= 1) officeDoorAnim.opening = false;
+}
+
+function tryUnlockOfficeDoor() {
+  if (!nearOfficeDoor()) return false;
+  if (!game.hasKey) {
+    showSubtitle('Locked. One of the guards should be carrying the key.', 2500);
+    return true;
+  }
+
+  officeDoorUnlocked = true;
+  game.doorUnlocked = true;
+  officeDoorAnim.opening = true;
+  officeDoorAnim.t = 0;
+
+  // Only the door is a collider that has to go — the walls around the
+  // doorway stay solid, so nothing needs restoring except the door on reset.
+  const idx = colliders.indexOf(officeDoor);
+  if (idx > -1) colliders.splice(idx, 1);
+
+  showSubtitle('Office unlocked.', 2000);
+  return true;
+}
 
  function tryPickupKeycard() {
   if (game.hasKeycard) return false;
@@ -422,41 +462,17 @@ let officeDoorUnlocked = false;
   showLine('keycardPickup');
   return true;
  }
-const OFFICE_DOOR_OPEN_X = 3.0; // where the door slides to when open
-
-
-function tryUnlockOfficeDoor() {
-  if (officeDoorUnlocked || !game.hasKey) return false;
-  if (distanceXZ(player.group.position, officeDoor.position) > OFFICE_DOOR_INTERACT_DISTANCE) return false;
-
-  officeDoorUnlocked = true;
-  game.doorUnlocked = true;
-  officeDoor.position.x = 3.0;
-
-  // Remove door from colliders
-  const idx = colliders.indexOf(officeDoor);
-  if (idx > -1) colliders.splice(idx, 1);
-
-  // Also remove the front wall so player can walk through the doorway
-  for (let i = colliders.length - 1; i >= 0; i--) {
-    const c = colliders[i];
-    if (c.position && Math.abs(c.position.z - 21) < 0.3 && Math.abs(c.position.x - 5) < 1) {
-      colliders.splice(i, 1);
-    }
-  }
-
-  showSubtitle('Office unlocked.', 2000);
-  return true;
-}
-
 function tryInteract() {
   const guardAWasDown = guardA.down;
+  const hadKey = game.hasKey;
   if (guardA.tryInteract(player.group.position)) {
-    if (!guardAWasDown && guardA.down) showLine('takedown', 4500);
-    if (guardA.hasKey && !game.hasKey) {
-      game.hasKey = true;
-      keyMesh.visible = false;  
-      showSubtitle('Key acquired — use it to unlock the manager\'s office.', 3000);
+    if (!guardAWasDown && guardA.down) {
+      showLine('takedown', 4500);
+      keyMesh.visible = true; // key shows beside the body
+    }
+    if (!hadKey && game.hasKey) {
+      keyMesh.visible = false;
+      showSubtitle('Key acquired \u2014 use it to unlock the manager\'s office.', 3000);
     }
     return;
   }
@@ -494,8 +510,8 @@ function checkOfficesEntry() {
 function getInteractPrompt() {
   const guardPrompt = guardA.getPrompt(player.group.position);
   if (guardPrompt) return guardPrompt;
-  if (!officeDoorUnlocked && game.hasKey && distanceXZ(player.group.position, officeDoor.position) <= OFFICE_DOOR_INTERACT_DISTANCE) {
-    return '[E] Unlock office';
+  if (nearOfficeDoor()) {
+    return game.hasKey ? '[E] Unlock office' : 'Locked \u2014 you need a key';
   }
   if (!game.hasKeycard && distanceXZ(player.group.position, keycardMesh.position) <= KEYCARD_INTERACT_DISTANCE) {
     return '[E] Pick up access card';
@@ -529,9 +545,11 @@ function checkElevator(dt, elapsed) {
 function resetLevel() {
   game.guardADown = false;
   game.hasKey = false;
-  game.doorUnlocked = false;            
-  officeDoorUnlocked = false;           
-  officeDoor.position.x = 5;            
+  game.doorUnlocked = false;
+  officeDoorUnlocked = false;
+  officeDoorAnim.opening = false;
+  officeDoorAnim.t = 0;
+  officeDoor.position.x = OFFICE_DOOR_CLOSED_X;
   if (!colliders.includes(officeDoor)) colliders.push(officeDoor);
   game.hasKeycard = false;
   game.alarmActive = false;
@@ -550,7 +568,7 @@ function resetLevel() {
   guardB.reset();
   player.group.position.copy(PLAYER_SPAWN);
   keycardMesh.visible = true;
-  keyMesh.visible = true;
+  keyMesh.visible = false; // only appears once Guard A is down
 
   ambient.color.setHex(0x1a1a2e);
   ambient.intensity = 0.6;
@@ -718,7 +736,7 @@ function animate() {
   promptEl.textContent = promptText || '';
   promptEl.style.display = promptText ? 'block' : 'none';
 
-  if (!inMenu) updateElevatorDoors(dt);
+  if (!inMenu) { updateElevatorDoors(dt); updateOfficeDoor(dt); }
 
   if (game.alarmActive && !game.levelComplete) {
     ambient.intensity = 0.4 + Math.abs(Math.sin(elapsed * 6)) * 0.5;

@@ -516,13 +516,14 @@ export function createLevel1(scene) {
   const elevator = makeElevator(ELEVATOR_POS);
   lobby.add(elevator.group);
 
-    // Key mesh — visible on the floor near Guard A. Player picks it up after takedown.
+  // Key mesh — hidden until Guard A is taken down, then it shows beside the body.
   const keyMat = new THREE.MeshStandardMaterial({
     color: 0xd4a017, emissive: 0xd4a017, emissiveIntensity: 0.5, metalness: 0.8, roughness: 0.2,
   });
   const keyMesh = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.04, 0.08), keyMat);
   keyMesh.position.set(-2.2, 0.15, 3.3);
   keyMesh.name = 'keyMesh';
+  keyMesh.visible = false;
   lobby.add(keyMesh);
 
   lobby.add(makeCeiling(12, 10, 0, CEILING_HEIGHT, 0));
@@ -575,35 +576,40 @@ export function createLevel1(scene) {
   const mgrOffice = new THREE.Group();
   mgrOffice.name = 'ManagerOffice';
   
-  // Four walls — fully enclosed, only entrance is the locked door
-  mgrOffice.add(makeOfficeWall(4, 4, 0.2, 5, 2, 17, Math.PI / 2));    // back wall
-  mgrOffice.add(makeOfficeWall(4, 4, 0.2, 6.9, 2, 19, 0));            // right wall
-  mgrOffice.add(makeOfficeWall(4, 4, 0.2, 3.1, 2, 19, 0));            // left wall
-  mgrOffice.add(makeOfficeWall(4, 4, 0.2, 5, 2, 21, 0));              // front wall
+  // Interior footprint: x 3..7, z 17..21 (back-right corner of the Offices).
+  // The east side (x=7) and north side (z=21) are already the Offices' own
+  // outer walls, so only two new walls are needed: the west wall (x=3) and
+  // the door wall (z=17), which faces into the Offices. The door wall has a
+  // 1.0m gap centred on x=5, closed by the sliding door below.
+  mgrOffice.add(makeOfficeWall(4, 4, 0.2, 3, 2, 19, Math.PI / 2)); // west wall
+  mgrOffice.add(makeOfficeWall(1.4, 4, 0.2, 3.7, 2, 17));          // door wall, left of door (x 3.0-4.4)
+  mgrOffice.add(makeOfficeWall(1.4, 4, 0.2, 6.3, 2, 17));          // door wall, right of door (x 5.6-7.0)
+  mgrOffice.add(makeOfficeWall(1.2, 1.6, 0.2, 5, 3.2, 17));        // lintel above the door
 
-  // Locked door — centered on front wall
+  // Door frame posts either side of the gap
   const doorFrameMat = new THREE.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.7 });
-  const frameLeft = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.6, 0.15), doorFrameMat);
-  frameLeft.position.set(4.45, 1.3, 21.1);
+  const frameLeft = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.4, 0.15), doorFrameMat);
+  frameLeft.position.set(4.45, 1.2, 17);
   mgrOffice.add(frameLeft);
-  const frameRight = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.6, 0.15), doorFrameMat);
-  frameRight.position.set(5.55, 1.3, 21.1);
+  const frameRight = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.4, 0.15), doorFrameMat);
+  frameRight.position.set(5.55, 1.2, 17);
   mgrOffice.add(frameRight);
-  const frameTop = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.1, 0.15), doorFrameMat);
-  frameTop.position.set(5, 2.55, 21.1);
-  mgrOffice.add(frameTop);
 
+  // Sliding door. It sits against the room-side face of the wall so that when
+  // main.js slides it +x it runs along the inside of the right-hand wall
+  // segment instead of clipping through it. The handle is a CHILD of the door
+  // so it travels with it (a door and its handle are one moving assembly).
   const officeDoorMat = new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.6 });
   const officeDoor = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.4, 0.08), officeDoorMat);
-  officeDoor.position.set(5, 1.2, 21.1);
+  officeDoor.position.set(5, 1.2, 17.14);
   officeDoor.name = 'officeDoor';
   mgrOffice.add(officeDoor);
 
   const handleMat = new THREE.MeshStandardMaterial({ color: 0xccaa00, metalness: 0.8, roughness: 0.2 });
-  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.12, 0.04), handleMat);
-  handle.position.set(5.35, 1.2, 21.0);
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.12, 0.06), handleMat);
+  handle.position.set(0.35, 0, -0.06); // door-local: on the Offices-facing side
   handle.name = 'doorHandle';
-  mgrOffice.add(handle);
+  officeDoor.add(handle);
 
   mgrOffice.add(makeManagerDesk());
 
@@ -625,12 +631,12 @@ export function createLevel1(scene) {
 
   const shelfMat = new THREE.MeshStandardMaterial({ color: 0x5c3a1e, roughness: 0.7 });
   const shelf = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.8, 0.3), shelfMat);
-  shelf.position.set(5, 0.9, 17.15);
+  shelf.position.set(4, 0.9, 20.75); // against the north wall
   mgrOffice.add(shelf);
   const bookColors = [0xcc3333, 0x3366cc, 0x33aa33, 0xcc9933, 0x9933cc];
   for (let i = 0; i < 5; i++) {
     const book = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.25, 0.2), new THREE.MeshStandardMaterial({ color: bookColors[i], roughness: 0.8 }));
-    book.position.set(4.55 + i * 0.2, 1.5, 17.15);
+    book.position.set(3.55 + i * 0.2, 1.5, 20.62);
     mgrOffice.add(book);
   }
 
@@ -666,7 +672,7 @@ level1.traverse((obj) => {
   // Collect ALL solid meshes except floor, ceiling, lights, and elevator
   const name = obj.name.toLowerCase();
   if (name.includes('floor') || name.includes('ceiling') || 
-      name.includes('light') || name.includes('elevator')) return;
+      name.includes('light') || name.includes('elevator') || name.includes('handle')) return;
   // Also skip if material is clearly non-solid (glass, emissive-only)
   if (obj.material && obj.material.transparent) return;
   colliders.push(obj);

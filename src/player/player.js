@@ -27,41 +27,9 @@ export class Player {
       this.actions[clip.name] = this.mixer.clipAction(clip);
     });
     this.currentAction = null;
-    this._isDisguised = false;
 
     this.playAction('Idle');
     scene.add(this.group);
-  }
-
-  // Swap player model to guard model (or back)
-    setDisguised(disguised) {
-    if (this._isDisguised === disguised) return;
-    this._isDisguised = disguised;
-
-    this.model.traverse((child) => {
-      if (child.isMesh && child.material) {
-        if (disguised) {
-          if (!child.material._origColor) child.material._origColor = child.material.color.clone();
-          if (!child.material._origMap) child.material._origMap = child.material.map || null;
-          if (!child.material._origEmissive) child.material._origEmissive = child.material.emissive ? child.material.emissive.clone() : null;
-          if (!child.material._origEmissiveIntensity) child.material._origEmissiveIntensity = child.material.emissiveIntensity ?? 0;
-          if (!child.material._origNormalMap) child.material._origNormalMap = child.material.normalMap || null;
-          child.material.map = null;
-          child.material.normalMap = null;
-          child.material.color.setHex(0x2b3a67);
-          child.material.emissive = new THREE.Color(0x3d5a99);
-          child.material.emissiveIntensity = 0.6;
-          child.material.needsUpdate = true;
-        } else {
-          if (child.material._origColor) child.material.color.copy(child.material._origColor);
-          if (child.material._origMap !== undefined) child.material.map = child.material._origMap;
-          if (child.material._origEmissive) child.material.emissive.copy(child.material._origEmissive);
-          if (child.material._origEmissiveIntensity !== undefined) child.material.emissiveIntensity = child.material._origEmissiveIntensity;
-          if (child.material._origNormalMap !== undefined) child.material.normalMap = child.material._origNormalMap;
-          child.material.needsUpdate = true;
-        }
-      }
-    });
   }
 
   playAction(name, fadeTime = 0.2) {
