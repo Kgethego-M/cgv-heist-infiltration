@@ -427,7 +427,7 @@ function tryInteract() {
   if (guardA.tryInteract(player.group.position)) {
     if (!guardAWasDown && guardA.down) showLine('takedown', 4500);
     if (guardA.looted && !playerIsDisguised) {
-      player.setDisguised(true, getGuardTemplate());
+      player.setDisguised(true);
       playerIsDisguised = true;
       showSubtitle('Uniform acquired — Guard B\'s vision is reduced.', 3000);
     }

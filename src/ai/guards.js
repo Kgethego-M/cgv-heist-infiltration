@@ -146,14 +146,25 @@ export class GuardA {
     this.game.hasDisguise = true;
   }
 
-  reset() {
+    reset() {
     this.down = false;
     this.looted = false;
     this.idleTime = 0;
     this.group.rotation.z = 0;
     this.group.rotation.y = this.baseRotation;
-    this.body.position.y = this.mixer ? 0 : 0.9; // real model's own rig sits at floor level
-    if (this.mixer) playAction(this, 'Idle');
+    // Reset body mesh — GLTF model origin is at feet, not center
+    if (this.body) {
+      this.body.rotation.x = 0;
+      this.body.rotation.y = 0;
+      this.body.rotation.z = 0;
+      this.body.position.set(0, 0, 0);
+    }
+    // Restart idle animation
+    if (this.mixer) {
+      this.mixer.stopAllAction();
+      this.currentAction = null;
+      playAction(this, 'Idle');
+    }
   }
 }
 

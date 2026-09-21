@@ -13,72 +13,55 @@ export async function loadPlayerModel(url = './assets/models/player_character.gl
 const MODEL_YAW_OFFSET = 0;
 
 export class Player {
-  constructor(scene, gltf) {
+   constructor(scene, gltf) {
     this.group = new THREE.Group();
     this.group.name = 'Player';
 
-    // Store original player model data for restoring after disguise
-    this._originalModel = gltf.scene;
-    this._originalModel.rotation.y = MODEL_YAW_OFFSET;
-    this._originalAnimations = gltf.animations;
-
-    this.model = this._originalModel;
+    this.model = gltf.scene;
+    this.model.rotation.y = MODEL_YAW_OFFSET;
     this.group.add(this.model);
 
     this.mixer = new THREE.AnimationMixer(this.model);
     this.actions = {};
-    this._setupActions(this._originalAnimations);
-
+    gltf.animations.forEach((clip) => {
+      this.actions[clip.name] = this.mixer.clipAction(clip);
+    });
+    this.currentAction = null;
     this._isDisguised = false;
-    this._guardMixer = null;
-    this._guardActions = {};
 
     this.playAction('Idle');
     scene.add(this.group);
   }
 
-  _setupActions(animations) {
-    this.actions = {};
-    animations.forEach((clip) => {
-      this.actions[clip.name] = this.mixer.clipAction(clip);
-    });
-  }
-
   // Swap player model to guard model (or back)
-  setDisguised(disguised, guardTemplate) {
+    setDisguised(disguised) {
     if (this._isDisguised === disguised) return;
     this._isDisguised = disguised;
 
-    // Remove current model
-    this.group.remove(this.model);
-    if (this.mixer) this.mixer.stopAllAction();
-
-    if (disguised && guardTemplate) {
-      // Clone guard model
-      this.model = SkeletonUtils.clone(guardTemplate.scene);
-      this.model.rotation.y = MODEL_YAW_OFFSET;
-      this.group.add(this.model);
-
-      // Set up guard animations
-      this._guardMixer = new THREE.AnimationMixer(this.model);
-      this._guardActions = {};
-      guardTemplate.animations.forEach((clip) => {
-        this._guardActions[clip.name] = this._guardMixer.clipAction(clip);
-      });
-      this.mixer = this._guardMixer;
-      this.actions = this._guardActions;
-    } else {
-      // Restore original player model
-      this.model = this._originalModel;
-      this.group.add(this.model);
-
-      this.mixer = new THREE.AnimationMixer(this.model);
-      this._setupActions(this._originalAnimations);
-      this.actions = this.actions; // already set by _setupActions
-    }
-
-    this.currentAction = null;
-    this.playAction('Idle');
+    this.model.traverse((child) => {
+      if (child.isMesh && child.material) {
+        if (disguised) {
+          if (!child.material._origColor) child.material._origColor = child.material.color.clone();
+          if (!child.material._origMap) child.material._origMap = child.material.map || null;
+          if (!child.material._origEmissive) child.material._origEmissive = child.material.emissive ? child.material.emissive.clone() : null;
+          if (!child.material._origEmissiveIntensity) child.material._origEmissiveIntensity = child.material.emissiveIntensity ?? 0;
+          if (!child.material._origNormalMap) child.material._origNormalMap = child.material.normalMap || null;
+          child.material.map = null;
+          child.material.normalMap = null;
+          child.material.color.setHex(0x2b3a67);
+          child.material.emissive = new THREE.Color(0x3d5a99);
+          child.material.emissiveIntensity = 0.6;
+          child.material.needsUpdate = true;
+        } else {
+          if (child.material._origColor) child.material.color.copy(child.material._origColor);
+          if (child.material._origMap !== undefined) child.material.map = child.material._origMap;
+          if (child.material._origEmissive) child.material.emissive.copy(child.material._origEmissive);
+          if (child.material._origEmissiveIntensity !== undefined) child.material.emissiveIntensity = child.material._origEmissiveIntensity;
+          if (child.material._origNormalMap !== undefined) child.material.normalMap = child.material._origNormalMap;
+          child.material.needsUpdate = true;
+        }
+      }
+    });
   }
 
   playAction(name, fadeTime = 0.2) {
