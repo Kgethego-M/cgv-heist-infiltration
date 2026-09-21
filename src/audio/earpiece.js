@@ -14,11 +14,12 @@ const LINES = {
     file: 'lingering-guard-a.mp3',
   },
   takedown: {
-    text: '"Good. Take his uniform, it\u2019ll buy you some room if you\u2019re not careless."',
+    text: '"Good. Search his body for the office key."',
+
     file: 'takedown.mp3',
   },
   enterOffices: {
-    text: '"Keycard should be in here somewhere. Check the desks."',
+    text: "The keycard is in the manager's office. You'll need to find a way in.",
     file: 'enter-offices.mp3',
   },
   keycardPickup: {

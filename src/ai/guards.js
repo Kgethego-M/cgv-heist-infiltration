@@ -69,7 +69,7 @@ export class GuardA {
   constructor(scene, game, position) {
     this.game = game;
     this.down = false;
-    this.looted = false;
+    this.hasKey = false;
     this.idleTime = 0;
     this.interactDistance = 1.8;
 
@@ -111,17 +111,17 @@ export class GuardA {
     }
   }
 
-  getPrompt(playerPos) {
+   getPrompt(playerPos) {
     if (this.horizDistanceTo(playerPos) > this.interactDistance) return null;
     if (!this.down) return '[E] Take down guard';
-    if (!this.looted) return '[E] Take uniform';
+    if (!this.hasKey) return '[E] Take key';
     return null;
   }
 
   tryInteract(playerPos) {
     if (this.horizDistanceTo(playerPos) > this.interactDistance) return false;
     if (!this.down) { this.takeDown(); return true; }
-    if (!this.looted) { this.loot(); return true; }
+    if (!this.hasKey) { this.takeKey(); return true; }
     return false;
   }
 
@@ -141,9 +141,9 @@ export class GuardA {
     }
   }
 
-  loot() {
-    this.looted = true;
-    this.game.hasDisguise = true;
+   takeKey() {
+    this.hasKey = true;
+    this.game.hasKey = true;
   }
 
     reset() {

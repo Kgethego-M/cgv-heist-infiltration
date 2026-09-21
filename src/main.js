@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { createLevel1, ELEVATOR_IDLE_COLOR, ELEVATOR_ALARM_COLOR } from './levels/level1.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-import { GuardA, GuardB, loadGuardModel, getGuardTemplate } from './ai/guards.js';
+import { GuardA, GuardB, loadGuardModel } from './ai/guards.js';
 import { Player, loadPlayerModel } from './player/player.js';
 import { loadEarpieceAudio, playLine } from './audio/earpiece.js';
 
@@ -92,11 +92,13 @@ let introPlaying = false;
 const ESCAPE_TIME_LIMIT = 25;
 const ELEVATOR_REACH_DISTANCE = 1.8;
 const KEYCARD_INTERACT_DISTANCE = 1.6;
+const OFFICE_DOOR_INTERACT_DISTANCE = 2.0;
 
 const game = {
   guardADown: false,
-  hasDisguise: false,
+  hasKey: false,
   hasKeycard: false,
+  doorUnlocked: false,
   alarmActive: false,
   alarmReason: null,
   levelComplete: false,
@@ -187,7 +189,7 @@ function restartFromEndScreen() {
 }
 
 // LEVEL
-const { root, colliders, elevatorPosition, elevatorDoors, elevatorIndicatorMat, keycardMesh, lightFixturePositions } = createLevel1(scene);
+const { root, colliders, elevatorPosition, elevatorDoors, elevatorIndicatorMat, keycardMesh, keyMesh, officeDoor, lightFixturePositions } = createLevel1(scene);
 addCeilingLights(lightFixturePositions);
 
 // Elevator door animation — advances every frame regardless of
@@ -409,8 +411,9 @@ function distanceXZ(a, b) {
   _distTmp.set(b.x - a.x, 0, b.z - a.z);
   return _distTmp.length();
 }
+let officeDoorUnlocked = false;
 
-function tryPickupKeycard() {
+ function tryPickupKeycard() {
   if (game.hasKeycard) return false;
   if (distanceXZ(player.group.position, keycardMesh.position) > KEYCARD_INTERACT_DISTANCE) return false;
 
@@ -418,21 +421,46 @@ function tryPickupKeycard() {
   keycardMesh.visible = false;
   showLine('keycardPickup');
   return true;
-}
+ }
+const OFFICE_DOOR_OPEN_X = 3.0; // where the door slides to when open
 
-let playerIsDisguised = false;
+
+function tryUnlockOfficeDoor() {
+  if (officeDoorUnlocked || !game.hasKey) return false;
+  if (distanceXZ(player.group.position, officeDoor.position) > OFFICE_DOOR_INTERACT_DISTANCE) return false;
+
+  officeDoorUnlocked = true;
+  game.doorUnlocked = true;
+  officeDoor.position.x = 3.0;
+
+  // Remove door from colliders
+  const idx = colliders.indexOf(officeDoor);
+  if (idx > -1) colliders.splice(idx, 1);
+
+  // Also remove the front wall so player can walk through the doorway
+  for (let i = colliders.length - 1; i >= 0; i--) {
+    const c = colliders[i];
+    if (c.position && Math.abs(c.position.z - 21) < 0.3 && Math.abs(c.position.x - 5) < 1) {
+      colliders.splice(i, 1);
+    }
+  }
+
+  showSubtitle('Office unlocked.', 2000);
+  return true;
+}
 
 function tryInteract() {
   const guardAWasDown = guardA.down;
   if (guardA.tryInteract(player.group.position)) {
     if (!guardAWasDown && guardA.down) showLine('takedown', 4500);
-    if (guardA.looted && !playerIsDisguised) {
-      player.setDisguised(true);
-      playerIsDisguised = true;
-      showSubtitle('Uniform acquired — Guard B\'s vision is reduced.', 3000);
+    if (guardA.hasKey && !game.hasKey) {
+      game.hasKey = true;
+      keyMesh.visible = false;  
+      showSubtitle('Key acquired — use it to unlock the manager\'s office.', 3000);
     }
     return;
   }
+  if (tryUnlockOfficeDoor()) return;
   tryPickupKeycard();
 }
 const GUARD_A_LINGER_RANGE = 4;
@@ -466,8 +494,11 @@ function checkOfficesEntry() {
 function getInteractPrompt() {
   const guardPrompt = guardA.getPrompt(player.group.position);
   if (guardPrompt) return guardPrompt;
+  if (!officeDoorUnlocked && game.hasKey && distanceXZ(player.group.position, officeDoor.position) <= OFFICE_DOOR_INTERACT_DISTANCE) {
+    return '[E] Unlock office';
+  }
   if (!game.hasKeycard && distanceXZ(player.group.position, keycardMesh.position) <= KEYCARD_INTERACT_DISTANCE) {
-    return '[E] Pick up keycard';
+    return '[E] Pick up access card';
   }
   return null;
 }
@@ -497,9 +528,11 @@ function checkElevator(dt, elapsed) {
 
 function resetLevel() {
   game.guardADown = false;
-  game.hasDisguise = false;
-  playerIsDisguised = false;
-  player.setDisguised(false);
+  game.hasKey = false;
+  game.doorUnlocked = false;            
+  officeDoorUnlocked = false;           
+  officeDoor.position.x = 5;            
+  if (!colliders.includes(officeDoor)) colliders.push(officeDoor);
   game.hasKeycard = false;
   game.alarmActive = false;
   game.alarmReason = null;
@@ -517,6 +550,7 @@ function resetLevel() {
   guardB.reset();
   player.group.position.copy(PLAYER_SPAWN);
   keycardMesh.visible = true;
+  keyMesh.visible = true;
 
   ambient.color.setHex(0x1a1a2e);
   ambient.intensity = 0.6;

@@ -163,6 +163,7 @@ function makeKeycardMap() {
 // this is deliberately plain so it's obviously "blockout, not final"
 const floorMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
 const wallMat = new THREE.MeshStandardMaterial({ color: 0x333344 });
+const officeWallMat = new THREE.MeshStandardMaterial({ color:0xeeeeee, roughness: 0.9 });
 const markerMat = {
   guard: new THREE.MeshStandardMaterial({ color: 0xff3333, emissive: 0xff3333, emissiveIntensity: 0.4 }),
   player: new THREE.MeshStandardMaterial({ color: 0x33ff66, emissive: 0x33ff66, emissiveIntensity: 0.4 }),
@@ -247,7 +248,15 @@ function makeWall(width, height, thickness, x, y, z, rotationY = 0) {
   wall.rotation.y = rotationY;
   return wall;
 }
-
+function makeOfficeWall(width, height, thickness, x, y, z, rotationY = 0) {
+  const wall = new THREE.Mesh(
+    new THREE.BoxGeometry(width, height, thickness),
+    officeWallMat
+  );
+  wall.position.set(x, y, z);
+  wall.rotation.y = rotationY;
+  return wall;
+}
 // Ceiling plane — rotated the OPPOSITE way from the floor so its visible
 // face points down into the room, not up and out of the building.
 function makeCeiling(width, depth, x, y, z) {
@@ -507,6 +516,15 @@ export function createLevel1(scene) {
   const elevator = makeElevator(ELEVATOR_POS);
   lobby.add(elevator.group);
 
+    // Key mesh — visible on the floor near Guard A. Player picks it up after takedown.
+  const keyMat = new THREE.MeshStandardMaterial({
+    color: 0xd4a017, emissive: 0xd4a017, emissiveIntensity: 0.5, metalness: 0.8, roughness: 0.2,
+  });
+  const keyMesh = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.04, 0.08), keyMat);
+  keyMesh.position.set(-2.2, 0.15, 3.3);
+  keyMesh.name = 'keyMesh';
+  lobby.add(keyMesh);
+
   lobby.add(makeCeiling(12, 10, 0, CEILING_HEIGHT, 0));
   [[-3, -2.5], [3, -2.5], [-3, 2.5], [3, 2.5]].forEach(([x, z]) => {
     lobby.add(makeLightFixture(x, CEILING_HEIGHT, z));
@@ -553,17 +571,77 @@ export function createLevel1(scene) {
   ];
     cubiclePositions.forEach(([x, z]) => offices.add(makeCubicle(x, z)));
 
-  // Manager's office — small enclosed room in the back-right corner, with a
-  // doorway gap on its left side facing into the main office area
+     // Manager's office — fully enclosed room with lighter walls
   const mgrOffice = new THREE.Group();
   mgrOffice.name = 'ManagerOffice';
-  mgrOffice.add(makeWall(4, 4, 0.2, 5, 2, 17, Math.PI / 2));       // back wall of mgr office
-  mgrOffice.add(makeWall(4, 4, 0.2, 6.9, 2, 19, 0));               // right-side wall
-  mgrOffice.add(makeWall(2, 4, 0.2, 4, 2, 21, 0));                 // partial front wall (leaves doorway gap)
+  
+  // Four walls — fully enclosed, only entrance is the locked door
+  mgrOffice.add(makeOfficeWall(4, 4, 0.2, 5, 2, 17, Math.PI / 2));    // back wall
+  mgrOffice.add(makeOfficeWall(4, 4, 0.2, 6.9, 2, 19, 0));            // right wall
+  mgrOffice.add(makeOfficeWall(4, 4, 0.2, 3.1, 2, 19, 0));            // left wall
+  mgrOffice.add(makeOfficeWall(4, 4, 0.2, 5, 2, 21, 0));              // front wall
 
-  // PLACEHOLDER: manager's desk with the keycard on top
-    mgrOffice.add(makeManagerDesk());
+  // Locked door — centered on front wall
+  const doorFrameMat = new THREE.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.7 });
+  const frameLeft = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.6, 0.15), doorFrameMat);
+  frameLeft.position.set(4.45, 1.3, 21.1);
+  mgrOffice.add(frameLeft);
+  const frameRight = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.6, 0.15), doorFrameMat);
+  frameRight.position.set(5.55, 1.3, 21.1);
+  mgrOffice.add(frameRight);
+  const frameTop = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.1, 0.15), doorFrameMat);
+  frameTop.position.set(5, 2.55, 21.1);
+  mgrOffice.add(frameTop);
 
+  const officeDoorMat = new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.6 });
+  const officeDoor = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.4, 0.08), officeDoorMat);
+  officeDoor.position.set(5, 1.2, 21.1);
+  officeDoor.name = 'officeDoor';
+  mgrOffice.add(officeDoor);
+
+  const handleMat = new THREE.MeshStandardMaterial({ color: 0xccaa00, metalness: 0.8, roughness: 0.2 });
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.12, 0.04), handleMat);
+  handle.position.set(5.35, 1.2, 21.0);
+  handle.name = 'doorHandle';
+  mgrOffice.add(handle);
+
+  mgrOffice.add(makeManagerDesk());
+
+  const chairMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
+  const chairSeat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 0.5), chairMat);
+  chairSeat.position.set(5, 0.5, 18.3);
+  mgrOffice.add(chairSeat);
+  const chairBack = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.08), chairMat);
+  chairBack.position.set(5, 0.8, 18.05);
+  mgrOffice.add(chairBack);
+  const chairLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.5, 8), new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.6 }));
+  chairLeg.position.set(5, 0.25, 18.3);
+  mgrOffice.add(chairLeg);
+
+  const cabinetMat = new THREE.MeshStandardMaterial({ color: 0x556677, roughness: 0.5 });
+  const cabinet = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.2, 0.6), cabinetMat);
+  cabinet.position.set(6.2, 0.6, 19);
+  mgrOffice.add(cabinet);
+
+  const shelfMat = new THREE.MeshStandardMaterial({ color: 0x5c3a1e, roughness: 0.7 });
+  const shelf = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.8, 0.3), shelfMat);
+  shelf.position.set(5, 0.9, 17.15);
+  mgrOffice.add(shelf);
+  const bookColors = [0xcc3333, 0x3366cc, 0x33aa33, 0xcc9933, 0x9933cc];
+  for (let i = 0; i < 5; i++) {
+    const book = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.25, 0.2), new THREE.MeshStandardMaterial({ color: bookColors[i], roughness: 0.8 }));
+    book.position.set(4.55 + i * 0.2, 1.5, 17.15);
+    mgrOffice.add(book);
+  }
+
+  // Ceiling and bright light for office
+  mgrOffice.add(makeCeiling(4, 4, 5, CEILING_HEIGHT, 19));
+  mgrOffice.add(makeLightFixture(5, CEILING_HEIGHT, 19, 1.5, 1.5));
+
+  // Bright point light inside office so it looks lit from within
+  const officeLight = new THREE.PointLight(0xffffff, 2, 8);
+  officeLight.position.set(5, 3, 19);
+  mgrOffice.add(officeLight);
   const keycardMesh = makeKeycard(5, 1.15, 19); // the keycard itself
   mgrOffice.add(keycardMesh);
 
@@ -596,13 +674,16 @@ level1.traverse((obj) => {
 
 console.log('Total colliders collected:', colliders.length);
 
-  return {
+return {
     root: level1,
     colliders,
     elevatorPosition: ELEVATOR_POS,
     elevatorDoors: { left: elevator.doorLeft, right: elevator.doorRight, closedX: elevator.closedX, openX: elevator.openX },
     elevatorIndicatorMat: elevator.indicatorMat,
     keycardMesh,
+    keyMesh,
+    officeDoor,
     lightFixturePositions,
   };
+
 }
