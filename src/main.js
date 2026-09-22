@@ -4,6 +4,11 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import { GuardA, GuardB, loadGuardModel } from './ai/guards.js';
 import { Player, loadPlayerModel } from './player/player.js';
 import { loadEarpieceAudio, playLine } from './audio/earpiece.js';
+import {
+  resumeAudioContext, playTakedownThud, playKeyPickup, playKeycardPickup,
+  playDoorUnlock, playDoorDenied, playElevatorDing, playWinSting, playLoseSting,
+  startAlarmKlaxon, stopAlarmKlaxon, startHeartbeat, stopHeartbeat,
+} from './audio/sfx.js';
 
 // 1. Scene
 const scene = new THREE.Scene();
@@ -26,7 +31,10 @@ document.body.appendChild(renderer.domElement);
 // controls.moveForward/moveRight
 const controls = new PointerLockControls(camera, renderer.domElement);
 const blocker = document.getElementById('blocker');
-blocker.addEventListener('click', () => controls.lock());
+blocker.addEventListener('click', () => {
+  controls.lock();
+  resumeAudioContext();
+});
 
 controls.addEventListener('lock', () => {
   blocker.style.display = 'none';
@@ -57,6 +65,33 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+// ---- Alarm beacon ---------------------------------------------------------
+// A single rotating security beacon, positioned roughly central between the
+// three rooms (Lobby z≈0, Corridor z≈8, Offices z≈16) so it's visible from
+// wherever the alarm catches the player. Off (intensity 0) until the alarm
+// fires; updateAlarmBeacon() runs every frame and resetLevel() snaps it back
+// off between attempts.
+const BEACON_BASE = new THREE.Vector3(0, 3.7, 8);
+const BEACON_SWEEP_RADIUS = 3;
+const BEACON_SWEEP_SPEED = 3.2; // radians/sec
+const BEACON_FLASH_SPEED = 5.5;
+const beaconLight = new THREE.PointLight(ELEVATOR_ALARM_COLOR, 0, 9);
+beaconLight.position.copy(BEACON_BASE);
+scene.add(beaconLight);
+
+function updateAlarmBeacon(elapsed) {
+  if (!game.alarmActive || game.levelComplete) {
+    if (beaconLight.intensity !== 0) beaconLight.intensity = 0;
+    return;
+  }
+  const angle = elapsed * BEACON_SWEEP_SPEED;
+  beaconLight.position.x = BEACON_BASE.x + Math.cos(angle) * BEACON_SWEEP_RADIUS;
+  beaconLight.position.z = BEACON_BASE.z + Math.sin(angle) * BEACON_SWEEP_RADIUS;
+  // A hard on/off flash reads as a strobing beacon, a smooth sine reads as
+  // gentle breathing, which is the opposite of what an alarm should feel like.
+  beaconLight.intensity = Math.sin(elapsed * BEACON_FLASH_SPEED) > 0.4 ? 9 : 0;
+}
 
 // Keys
 const keys = {};
@@ -116,12 +151,24 @@ const game = {
     scene.background.setHex(0x220000);
     elevatorIndicatorMat.emissive.setHex(ELEVATOR_ALARM_COLOR);
 
+    startAlarmKlaxon();
+    startHeartbeat(() => {
+      // Speeds up from ~800ms between beats down to ~250ms as the escape
+      // clock runs out, so the tension audibly ramps with the countdown.
+      const t = this.escapeTimeRemaining ?? ESCAPE_TIME_LIMIT;
+      const frac = Math.max(0, Math.min(1, t / ESCAPE_TIME_LIMIT));
+      return 250 + frac * 550;
+    });
+
     showLine(reason === 'partner_found' ? 'alarmPartnerFound' : 'alarmSpotted');
   },
 
     onCaught(reason = 'caught') {
     if (this.levelComplete || endScreenVisible()) return;
     controls.unlock();
+    stopAlarmKlaxon();
+    stopHeartbeat();
+    playLoseSting();
     const line = playLine(reason === 'timeout' ? 'timeout' : 'caught');
     const message = line || (reason === 'timeout'
       ? 'The escape window closed — security caught you at the elevator.'
@@ -134,6 +181,9 @@ const game = {
     this.levelComplete = true;
     controls.unlock();
     doorAnim.opening = true;
+    stopAlarmKlaxon();
+    stopHeartbeat();
+    playElevatorDing();
 
     const secondsTaken = Math.floor((performance.now() - attemptStart) / 1000);
     const secondsLeft = Math.max(0, Math.ceil(this.escapeTimeRemaining ?? 0));
@@ -288,6 +338,7 @@ startBtn.addEventListener('click', () => {
   mainMenuEl.style.display = 'none';
   inMenu = false;
   controls.lock(); // this click is the required user gesture for both pointer lock and audio
+  resumeAudioContext();
   playIntroSequence();
 });
 
@@ -435,6 +486,7 @@ function updateOfficeDoor(dt) {
 function tryUnlockOfficeDoor() {
   if (!nearOfficeDoor()) return false;
   if (!game.hasKey) {
+    playDoorDenied();
     showSubtitle('Locked. One of the guards should be carrying the key.', 2500);
     return true;
   }
@@ -443,6 +495,7 @@ function tryUnlockOfficeDoor() {
   game.doorUnlocked = true;
   officeDoorAnim.opening = true;
   officeDoorAnim.t = 0;
+  playDoorUnlock();
 
   // Only the door is a collider that has to go — the walls around the
   // doorway stay solid, so nothing needs restoring except the door on reset.
@@ -459,6 +512,7 @@ function tryUnlockOfficeDoor() {
 
   game.hasKeycard = true;
   keycardMesh.visible = false;
+  playKeycardPickup();
   showLine('keycardPickup');
   return true;
  }
@@ -467,10 +521,12 @@ function tryInteract() {
   const hadKey = game.hasKey;
   if (guardA.tryInteract(player.group.position)) {
     if (!guardAWasDown && guardA.down) {
+      playTakedownThud();
       showLine('takedown', 4500);
       keyMesh.visible = true; // key shows beside the body
     }
     if (!hadKey && game.hasKey) {
+      playKeyPickup();
       keyMesh.visible = false;
       showSubtitle('Key acquired \u2014 use it to unlock the manager\'s office.', 3000);
     }
@@ -564,6 +620,11 @@ function resetLevel() {
   hasWarnedGuardAPartner = false;
   hasEnteredOffices = false;
 
+  stopAlarmKlaxon();
+  stopHeartbeat();
+  beaconLight.intensity = 0;
+  beaconLight.position.copy(BEACON_BASE);
+
   guardA.reset();
   guardB.reset();
   player.group.position.copy(PLAYER_SPAWN);
@@ -629,10 +690,6 @@ function updateMovement(dt) {
       player.group.position.x = nextX;
       player.group.position.z = nextZ;
     }
-    
-    console.log('x:', prevX.toFixed(2), '→', player.group.position.x.toFixed(2), 
-      (xBlocked ? ' BLOCKED' : ' OK'), '| z:', prevZ.toFixed(2), '→', player.group.position.z.toFixed(2),
-      (zBlocked ? ' BLOCKED' : ' OK'));
 
     const actuallyMoved = player.group.position.x !== prevX || player.group.position.z !== prevZ;
 
@@ -675,9 +732,6 @@ function updateCamera() {
       _desiredCamPos.copy(_camPivot).addScaledVector(_camDir, safeDist);
     }
   }
-    // DEBUG: log camera position every frame
-  console.log('CAM pos:', _desiredCamPos.x.toFixed(2), _desiredCamPos.z.toFixed(2), '| PLAYER pos:', player.group.position.x.toFixed(2), player.group.position.z.toFixed(2));
-  camera.position.copy(_desiredCamPos);
 
   camera.position.copy(_desiredCamPos);
 }
@@ -706,11 +760,6 @@ function updateMinimap() {
 const clock = new THREE.Clock();
 
 function animate() {
-    // Populate collider meshes on first frame when world matrices are current
-  if (colliderMeshes.length === 0 && colliders.length > 0) {
-    colliderMeshes = colliders.slice();
-    console.log('colliderMeshes populated:', colliderMeshes.length);
-  }
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.elapsedTime;
@@ -739,8 +788,13 @@ function animate() {
   if (!inMenu) { updateElevatorDoors(dt); updateOfficeDoor(dt); }
 
   if (game.alarmActive && !game.levelComplete) {
-    ambient.intensity = 0.4 + Math.abs(Math.sin(elapsed * 6)) * 0.5;
+    // A sharper curve than plain sine, exponent < 1 snaps through the
+    // middle faster and lingers near the extremes, closer to a strobe than
+    // a smooth breathing pulse.
+    const pulse = Math.pow(Math.abs(Math.sin(elapsed * 6)), 0.35);
+    ambient.intensity = 0.35 + pulse * 0.55;
   }
+  updateAlarmBeacon(elapsed);
 
   renderer.render(scene, camera);
   updateMinimap();
