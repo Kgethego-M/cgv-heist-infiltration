@@ -130,9 +130,14 @@ export class GuardA {
     this.game.guardADown = true;
     // Stop idle sway and rotation
     this.group.rotation.y = this.baseRotation;
-    // Rotate the body mesh itself to lie flat on the ground
+    // Rotate the body mesh itself to lie flat on the ground. Guard A stands
+    // right at the front edge of the reception desk facing AWAY from it
+    // (baseRotation points him toward the lobby centre), so tipping the body
+    // by +90° here lays him down face-first in the direction he's already
+    // facing — out into the open floor. The old -90° tipped him backward,
+    // straight into the desk behind him.
     if (this.body) {
-      this.body.rotation.x = -Math.PI / 2; // tip forward onto front
+      this.body.rotation.x = Math.PI / 2;
       this.body.position.y = 0.3; // lower so it sits on floor
     }
     // Also stop any playing animation
