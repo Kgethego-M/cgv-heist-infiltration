@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { createLevel1, ELEVATOR_IDLE_COLOR, ELEVATOR_ALARM_COLOR } from './levels/level1.js';
+import { createLevel2 } from './levels/level2.js';
+import { createLevel3 } from './levels/level3.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { GuardA, GuardB, loadGuardModel } from './ai/guards.js';
 import { Player, loadPlayerModel } from './player/player.js';
@@ -51,12 +53,21 @@ scene.add(ambient);
 // One PointLight per ceiling fixture — positions come straight from
 // level1.js so the light always lines up with its visible panel exactly.
 // Placed slightly below the fixture mesh, angled to spread downward.
-function addCeilingLights(positions) {
+// Every light added here is tracked so it can be removed when the level
+// changes (levels 1-3 all occupy the same world space, so only one is ever
+// loaded at a time).
+const levelLights = [];
+function addCeilingLights(positions, { color = 0xfff4e0, intensity = 6, distance = 7 } = {}) {
   positions.forEach((pos) => {
-    const light = new THREE.PointLight(0xfff4e0, 6, 7);
+    const light = new THREE.PointLight(color, intensity, distance);
     light.position.set(pos.x, pos.y - 0.3, pos.z);
     scene.add(light);
+    levelLights.push(light);
   });
+}
+function clearCeilingLights() {
+  levelLights.forEach((l) => scene.remove(l));
+  levelLights.length = 0;
 }
 
 // Resize
@@ -137,6 +148,7 @@ const game = {
   alarmActive: false,
   alarmReason: null,
   levelComplete: false,
+  objectiveComplete: false, // levels 2+ : terminal hacked / artifact taken
   escapeTimeRemaining: null,
   alarmsRaised: 0,
 
@@ -180,13 +192,17 @@ const game = {
     if (this.levelComplete) return;
     this.levelComplete = true;
     controls.unlock();
-    doorAnim.opening = true;
+    if (currentLevel === 1) doorAnim.opening = true;
     stopAlarmKlaxon();
     stopHeartbeat();
     playElevatorDing();
 
     const secondsTaken = Math.floor((performance.now() - attemptStart) / 1000);
     const secondsLeft = Math.max(0, Math.ceil(this.escapeTimeRemaining ?? 0));
+    if (currentLevel !== 1) {
+      showEndScreen(true, `Cleared in ${secondsTaken}s.`);
+      return;
+    }
     const alarmText = this.alarmsRaised === 0
       ? 'no alarms raised — clean run'
       : `${this.alarmsRaised} alarm raised, ${secondsLeft}s left on the escape clock`;
@@ -217,8 +233,16 @@ function showLine(key, duration) {
 }
 let attemptStart = performance.now();
 
+let endScreenWon = false;
 function showEndScreen(won, message) {
-  endTitleEl.textContent = won ? 'LEVEL COMPLETE' : 'MISSION FAILED';
+  endScreenWon = won;
+  const isFinal = currentLevel === TOTAL_LEVELS;
+  endTitleEl.textContent = won ? (isFinal ? 'MISSION COMPLETE' : 'LEVEL COMPLETE') : 'MISSION FAILED';
+  if (won) {
+    message += isFinal
+      ? ' Press R or click to play again from Level 1.'
+      : ` Press R or click to continue to Level ${currentLevel + 1}.`;
+  }
   endMessageEl.textContent = message;
   endScreenEl.className = won ? 'win' : 'lose';
   endScreenEl.style.display = 'flex';
@@ -233,14 +257,148 @@ function endScreenVisible() {
 }
 
 function restartFromEndScreen() {
+  const won = endScreenWon;
   hideEndScreen();
-  resetLevel();
+  if (won && currentLevel < TOTAL_LEVELS) loadLevel(currentLevel + 1); // win -> next level
+  else if (won) loadLevel(1);                                          // beat the last level -> back to start
+  else resetLevel();                                                   // loss -> retry current level
   blocker.style.display = 'flex'; // back to "Click to look around" — existing re-lock path
 }
 
 // LEVEL
 const { root, colliders, elevatorPosition, elevatorDoors, elevatorIndicatorMat, keycardMesh, keyMesh, officeDoor, lightFixturePositions } = createLevel1(scene);
 addCeilingLights(lightFixturePositions);
+
+// ---- Level management ------------------------------------------------------
+// `colliders` is shared BY REFERENCE with GuardB, checkCollision, wall-hug and
+// the camera, so it is never reassigned — on a level change it is emptied and
+// refilled in place. Level 1 is built once and swapped in/out of the scene;
+// levels 2 and 3 are rebuilt from scratch on every load (which doubles as
+// their reset).
+const TOTAL_LEVELS = 3;
+let currentLevel = 1;
+let levelHandle = null;                 // return value of createLevel2/3 while one of those is active
+const level1Colliders = [...colliders]; // snapshot incl. officeDoor, restored when returning to level 1
+const level1LightPositions = lightFixturePositions;
+
+const LEVEL_CONFIG = {
+  2: {
+    name: 'Server Room & Labs',
+    create: createLevel2,
+    ambient: { color: 0x1a2a3a, intensity: 0.3 },
+    background: 0x05080c,
+    light: { color: 0xaad4ff, intensity: 5, distance: 7 },
+    objectiveKey: 'terminalPosition',
+    objectiveMarker: 'marker_terminal',
+    objectivePrompt: '[E] Hack terminal',
+    objectiveDone: 'Terminal hacked — head for the exit elevator.',
+    exitBlocked: 'Hack the terminal before you leave.',
+    onObjectiveDone(marker) {
+      // clone so the shared module-level material isn't tinted for future attempts
+      marker.material = marker.material.clone();
+      marker.material.color.setHex(0x66ff66);
+      marker.material.emissive.setHex(0x66ff66);
+    },
+  },
+  3: {
+    name: 'Vault Wing',
+    create: createLevel3,
+    ambient: { color: 0x14141a, intensity: 0.2 },
+    background: 0x050508,
+    light: { color: 0xffb060, intensity: 4, distance: 6 },
+    objectiveKey: 'vaultItemPosition',
+    objectiveMarker: 'marker_vaultItem',
+    objectivePrompt: '[E] Take the artifact',
+    objectiveDone: 'Artifact secured — get out!',
+    exitBlocked: "You can't leave without the artifact.",
+    onObjectiveDone(marker) { marker.visible = false; },
+  },
+};
+const OBJECTIVE_INTERACT_DISTANCE = 2.0;
+const LEVEL_EXIT_RADIUS = 1.3; // levels 2+ (level 1 uses ELEVATOR_REACH_DISTANCE)
+
+function unloadCurrentLevel() {
+  clearCeilingLights();
+  beaconLight.intensity = 0;
+  if (currentLevel === 1) {
+    scene.remove(root);
+    setGuardsVisible(false);
+  } else if (levelHandle) {
+    scene.remove(levelHandle.root);
+    levelHandle.root.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); // materials are shared module-level, leave them
+    levelHandle = null;
+  }
+  colliders.length = 0;
+}
+
+function resetCommonState() {
+  game.alarmActive = false;
+  game.alarmReason = null;
+  game.levelComplete = false;
+  game.objectiveComplete = false;
+  game.escapeTimeRemaining = null;
+  game.alarmsRaised = 0;
+  isProne = false;
+  isWallHugging = false;
+  lastNoCardWarn = 0;
+  stopAlarmKlaxon();
+  stopHeartbeat();
+  beaconLight.position.copy(BEACON_BASE);
+  clearTimeout(subtitleTimer);
+  subtitleEl.style.display = 'none';
+  promptEl.style.display = 'none';
+  attemptStart = performance.now();
+}
+
+function loadLevel(n) {
+  unloadCurrentLevel();
+  currentLevel = n;
+  resetCommonState();
+
+  if (n === 1) {
+    scene.add(root);
+    addCeilingLights(level1LightPositions);
+    colliders.push(...level1Colliders);
+    setGuardsVisible(true);
+    resetLevel1(); // repositions player, resets guards/items/doors/ambient
+    return;
+  }
+
+  const cfg = LEVEL_CONFIG[n];
+  levelHandle = cfg.create(scene);
+  colliders.push(...levelHandle.colliders);
+  addCeilingLights(levelHandle.lightFixturePositions, cfg.light);
+  if (levelHandle.dramaticFixturePositions) {
+    addCeilingLights(levelHandle.dramaticFixturePositions, { color: 0xfff4d0, intensity: 10, distance: 6 });
+  }
+
+  ambient.color.setHex(cfg.ambient.color);
+  ambient.intensity = cfg.ambient.intensity;
+  scene.background.setHex(cfg.background);
+
+  player.group.position.copy(levelHandle.entryPosition);
+  player.group.rotation.y = 0;          // levels 2/3 run toward +z
+  camera.rotation.set(0, Math.PI, 0);   // camera behind the player, looking +z
+  showSubtitle(`Level ${n} — ${cfg.name}`, 4000);
+}
+
+function objectiveSpot() {
+  return levelHandle && LEVEL_CONFIG[currentLevel] ? levelHandle[LEVEL_CONFIG[currentLevel].objectiveKey] : null;
+}
+function nearObjective() {
+  const spot = objectiveSpot();
+  return !!spot && !game.objectiveComplete && distanceXZ(player.group.position, spot) <= OBJECTIVE_INTERACT_DISTANCE;
+}
+function tryObjective() {
+  if (!nearObjective()) return false;
+  const cfg = LEVEL_CONFIG[currentLevel];
+  game.objectiveComplete = true;
+  playKeycardPickup();
+  const marker = levelHandle.root.getObjectByName(cfg.objectiveMarker);
+  if (marker) cfg.onObjectiveDone(marker);
+  showSubtitle(cfg.objectiveDone, 3500);
+  return true;
+}
 
 // Elevator door animation — advances every frame regardless of
 // game.levelComplete, since the whole point is that it keeps sliding open
@@ -317,6 +475,9 @@ const [, playerGltf] = await Promise.all([
 const player = new Player(scene, playerGltf);
 player.group.position.copy(PLAYER_SPAWN);
 
+// Anything the guard constructors add to the scene is captured here so the
+// guards can be hidden while levels 2/3 are loaded (they only exist in level 1).
+const _sceneBeforeGuards = new Set(scene.children);
 const guardA = new GuardA(scene, game, new THREE.Vector3(-2.5, 0, 3));
 
 const waypoints = [
@@ -329,6 +490,8 @@ const waypoints = [
   new THREE.Vector3(0, 0, 8),
 ];
 const guardB = new GuardB(scene, waypoints, colliders, game, { partnerCheckIndex: 3, checkCollision });
+const guardObjects = scene.children.filter((c) => !_sceneBeforeGuards.has(c));
+function setGuardsVisible(v) { guardObjects.forEach((o) => { o.visible = v; }); }
 
 // Menu is ready once the player actually exists — enable Start now.
 startBtn.disabled = false;
@@ -517,6 +680,7 @@ function tryUnlockOfficeDoor() {
   return true;
  }
 function tryInteract() {
+  if (currentLevel !== 1) { tryObjective(); return; }
   const guardAWasDown = guardA.down;
   const hadKey = game.hasKey;
   if (guardA.tryInteract(player.group.position)) {
@@ -564,6 +728,7 @@ function checkOfficesEntry() {
 }
 
 function getInteractPrompt() {
+  if (currentLevel !== 1) return nearObjective() ? LEVEL_CONFIG[currentLevel].objectivePrompt : null;
   const guardPrompt = guardA.getPrompt(player.group.position);
   if (guardPrompt) return guardPrompt;
   if (nearOfficeDoor()) {
@@ -576,6 +741,17 @@ function getInteractPrompt() {
 }
 
 let lastNoCardWarn = 0;
+function checkLevelExit(elapsed) {
+  if (game.levelComplete || !levelHandle) return;
+  if (distanceXZ(player.group.position, levelHandle.exitPosition) > LEVEL_EXIT_RADIUS) return;
+  if (game.objectiveComplete) {
+    game.onWin();
+  } else if (elapsed - lastNoCardWarn > 2.5) {
+    lastNoCardWarn = elapsed;
+    showSubtitle(LEVEL_CONFIG[currentLevel].exitBlocked, 2500);
+  }
+}
+
 function checkElevator(dt, elapsed) {
   if (game.levelComplete) return;
 
@@ -598,7 +774,13 @@ function checkElevator(dt, elapsed) {
   }
 }
 
+// Restart whichever level is active (used after a loss).
 function resetLevel() {
+  if (currentLevel === 1) resetLevel1();
+  else loadLevel(currentLevel);
+}
+
+function resetLevel1() {
   game.guardADown = false;
   game.hasKey = false;
   game.doorUnlocked = false;
@@ -774,11 +956,15 @@ function animate() {
     updateMovement(dt);
     updateCamera();
     player.update(dt);
-    guardA.update(dt);
-    guardB.update(dt, player.group.position);
-    checkGuardAProximity(dt);
-    checkOfficesEntry();
-    checkElevator(dt, elapsed);
+    if (currentLevel === 1) {
+      guardA.update(dt);
+      guardB.update(dt, player.group.position);
+      checkGuardAProximity(dt);
+      checkOfficesEntry();
+      checkElevator(dt, elapsed);
+    } else {
+      checkLevelExit(elapsed);
+    }
   }
 
     const promptText = (inMenu || introPlaying || game.levelComplete || endScreenVisible()) ? null : getInteractPrompt();
