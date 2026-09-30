@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createLevel1, ELEVATOR_IDLE_COLOR, ELEVATOR_ALARM_COLOR } from './levels/level1.js';
+import { createLevel1, ELEVATOR_IDLE_COLOR, ELEVATOR_ALARM_COLOR, ROOM_SCALE } from './levels/level1.js';
 import { createLevel2 } from './levels/level2.js';
 import { createLevel3 } from './levels/level3.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
@@ -41,7 +41,28 @@ blocker.addEventListener('click', () => {
 controls.addEventListener('lock', () => {
   blocker.style.display = 'none';
 });
-controls.addEventListener('unlock', () => (blocker.style.display = 'flex'));
+// Level 2 puzzle overlays (wire puzzle, safe keypad) need a free mouse. While one is
+// open we unlock the pointer on purpose, so the "click to look around" blocker
+// must stay hidden. Declared here (not further down) because the top-level await
+// below means events can fire before later declarations run.
+let missionUiOpen = false;
+controls.addEventListener('unlock', () => {
+  if (!missionUiOpen) blocker.style.display = 'flex';
+});
+function setMissionUiOpen(open, relock) {
+  missionUiOpen = open;
+  if (open) {
+    controls.unlock();
+    return;
+  }
+  if (relock) {
+    controls.lock();
+    // If the browser refuses the re-lock, fall back to the normal blocker.
+    setTimeout(() => { if (!controls.isLocked && !missionUiOpen) blocker.style.display = 'flex'; }, 300);
+  } else {
+    blocker.style.display = 'flex';
+  }
+}
 
 // Lights
 // No hemisphere light — real ceiling fixtures (level1.js) are what light
@@ -65,6 +86,10 @@ function addCeilingLights(positions, { color = 0xfff4e0, intensity = 6, distance
     levelLights.push(light);
   });
 }
+// Level 1's rooms are ROOM_SCALE times bigger, so its ceiling lights need a
+// longer reach (and a bit more punch) to still overlap. Levels 2/3 pass their
+// own settings from LEVEL_CONFIG and are unaffected.
+const LEVEL1_LIGHT = { intensity: 6 * ROOM_SCALE, distance: 7 * ROOM_SCALE };
 function clearCeilingLights() {
   levelLights.forEach((l) => scene.remove(l));
   levelLights.length = 0;
@@ -83,11 +108,11 @@ window.addEventListener('resize', () => {
 // wherever the alarm catches the player. Off (intensity 0) until the alarm
 // fires; updateAlarmBeacon() runs every frame and resetLevel() snaps it back
 // off between attempts.
-const BEACON_BASE = new THREE.Vector3(0, 3.7, 8);
-const BEACON_SWEEP_RADIUS = 3;
+const BEACON_BASE = new THREE.Vector3(0, 3.7, 8 * ROOM_SCALE);
+const BEACON_SWEEP_RADIUS = 3 * ROOM_SCALE;
 const BEACON_SWEEP_SPEED = 3.2; // radians/sec
 const BEACON_FLASH_SPEED = 5.5;
-const beaconLight = new THREE.PointLight(ELEVATOR_ALARM_COLOR, 0, 9);
+const beaconLight = new THREE.PointLight(ELEVATOR_ALARM_COLOR, 0, 9 * ROOM_SCALE);
 beaconLight.position.copy(BEACON_BASE);
 scene.add(beaconLight);
 
@@ -110,6 +135,7 @@ let isProne = false; // toggled by 'c', separate from the held-down movement key
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   keys[k] = true;
+  if (missionUiOpen) return; // puzzle UI owns the keyboard
   if (k === 'e' && !e.repeat) tryInteract();
   if (k === 'v' && !e.repeat) toggleCameraMode();
   if (k === 'c' && !e.repeat) isProne = !isProne;
@@ -267,7 +293,7 @@ function restartFromEndScreen() {
 
 // LEVEL
 const { root, colliders, elevatorPosition, elevatorDoors, elevatorIndicatorMat, keycardMesh, keyMesh, officeDoor, lightFixturePositions } = createLevel1(scene);
-addCeilingLights(lightFixturePositions);
+addCeilingLights(lightFixturePositions, LEVEL1_LIGHT);
 
 // ---- Level management ------------------------------------------------------
 // `colliders` is shared BY REFERENCE with GuardB, checkCollision, wall-hug and
@@ -287,8 +313,10 @@ const LEVEL_CONFIG = {
     create: createLevel2,
     ambient: { color: 0x1a2a3a, intensity: 0.3 },
     background: 0x05080c,
-    light: { color: 0xaad4ff, intensity: 5, distance: 7 },
-    objectiveKey: 'terminalPosition',
+    // Level 2 is built with ROOM_SCALE like level 1, so its lights need the same longer reach.
+    light: { color: 0xaad4ff, intensity: 5 * ROOM_SCALE, distance: 7 * ROOM_SCALE },
+    minimapSize: 10 * ROOM_SCALE,
+    objectiveKey: 'terminalPosition', // (level 2 now uses levelHandle.missions instead; kept for reference)
     objectiveMarker: 'marker_terminal',
     objectivePrompt: '[E] Hack terminal',
     objectiveDone: 'Terminal hacked — head for the exit elevator.',
@@ -314,6 +342,18 @@ const LEVEL_CONFIG = {
     onObjectiveDone(marker) { marker.visible = false; },
   },
 };
+// Passed to createLevel2 so the level can drive subtitles, sounds, the pointer-lock
+// handoff for puzzle UIs, and mark the level objective complete.
+const missionHooks = {
+  onSubtitle: (text, ms) => showSubtitle(text, ms),
+  onUiChange: (open, relock) => setMissionUiOpen(open, relock),
+  onObjectiveComplete: () => { game.objectiveComplete = true; },
+  sfx: {
+    pickup: () => playKeycardPickup(),
+    unlock: () => playDoorUnlock(),
+    denied: () => playDoorDenied(),
+  },
+};
 const OBJECTIVE_INTERACT_DISTANCE = 2.0;
 const LEVEL_EXIT_RADIUS = 1.3; // levels 2+ (level 1 uses ELEVATOR_REACH_DISTANCE)
 
@@ -324,6 +364,8 @@ function unloadCurrentLevel() {
     scene.remove(root);
     setGuardsVisible(false);
   } else if (levelHandle) {
+    if (levelHandle.dispose) levelHandle.dispose(); // removes level 2's HUD/puzzle DOM
+    missionUiOpen = false;
     scene.remove(levelHandle.root);
     levelHandle.root.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); // materials are shared module-level, leave them
     levelHandle = null;
@@ -353,11 +395,12 @@ function resetCommonState() {
 function loadLevel(n) {
   unloadCurrentLevel();
   currentLevel = n;
+  setMinimapViewSize(n === 1 ? MINIMAP_SIZE_LEVEL1 : (LEVEL_CONFIG[n]?.minimapSize ?? MINIMAP_SIZE_DEFAULT));
   resetCommonState();
 
   if (n === 1) {
     scene.add(root);
-    addCeilingLights(level1LightPositions);
+    addCeilingLights(level1LightPositions, LEVEL1_LIGHT);
     colliders.push(...level1Colliders);
     setGuardsVisible(true);
     resetLevel1(); // repositions player, resets guards/items/doors/ambient
@@ -365,7 +408,7 @@ function loadLevel(n) {
   }
 
   const cfg = LEVEL_CONFIG[n];
-  levelHandle = cfg.create(scene);
+  levelHandle = cfg.create(scene, missionHooks);
   colliders.push(...levelHandle.colliders);
   addCeilingLights(levelHandle.lightFixturePositions, cfg.light);
   if (levelHandle.dramaticFixturePositions) {
@@ -440,6 +483,23 @@ const _collisionRaycaster = new THREE.Raycaster();
 const _collisionDir = new THREE.Vector3();
 const _collisionOrigin = new THREE.Vector3();
 let colliderMeshes = [];
+// Level 1 has a lot more solid props now, and building a fresh Box3 for every
+// collider on every test point (54 points x 2 axes x every frame) gets slow.
+// Level 1 colliders don't move while they're in the list (the office door is
+// removed from it before it slides, and reset puts it back where it started),
+// so their boxes are computed once. Levels 2/3 aren't cached, since I can't
+// see whether anything in them moves.
+const _boxCache = new WeakMap();
+const _testPoint = new THREE.Vector3();
+function colliderBox(mesh) {
+  if (currentLevel === 3) return new THREE.Box3().setFromObject(mesh); // level 3 not cached (unknown if anything moves); level 2's colliders are static
+  let box = _boxCache.get(mesh);
+  if (!box) {
+    box = new THREE.Box3().setFromObject(mesh);
+    _boxCache.set(mesh, box);
+  }
+  return box;
+}
 function checkCollision(x, z) {
   // Check a circle of points around (x, z) to account for player body radius
   const offsets = [
@@ -455,16 +515,16 @@ function checkCollision(x, z) {
   
   for (let [ox, oz] of offsets) {
     for (let h of heights) {
-      const testPoint = new THREE.Vector3(x + ox, h, z + oz);
+      _testPoint.set(x + ox, h, z + oz);
       for (let i = 0; i < colliders.length; i++) {
-        const box = new THREE.Box3().setFromObject(colliders[i]);
-        if (box.containsPoint(testPoint)) return true;
+        if (colliderBox(colliders[i]).containsPoint(_testPoint)) return true;
       }
     }
   }
   return false;
 }
-const PLAYER_SPAWN = new THREE.Vector3(-4, 0, -4.3);
+// Same position relative to the cover pillar as before (1.3m behind it), just at its scaled location.
+const PLAYER_SPAWN = new THREE.Vector3(-4 * ROOM_SCALE, 0, -3 * ROOM_SCALE - 1.3);
 
 // PLAYER + GUARDS
 const [, playerGltf] = await Promise.all([
@@ -478,16 +538,21 @@ player.group.position.copy(PLAYER_SPAWN);
 // Anything the guard constructors add to the scene is captured here so the
 // guards can be hidden while levels 2/3 are loaded (they only exist in level 1).
 const _sceneBeforeGuards = new Set(scene.children);
-const guardA = new GuardA(scene, game, new THREE.Vector3(-2.5, 0, 3));
+const guardA = new GuardA(scene, game, new THREE.Vector3(-2.5 * ROOM_SCALE, 0, 3 * ROOM_SCALE));
 
+// Original loop scaled by ROOM_SCALE, except waypoint 2: the old spot (4, 3)
+// is now inside the waiting area (armchair / coffee table), so it's pulled
+// in to a clear patch of floor. Index 3 is still the "check partner" stop,
+// 2.25m from Guard A as before (scaled).
+const S = ROOM_SCALE;
 const waypoints = [
   new THREE.Vector3(0, 0, 0),
-  new THREE.Vector3(4, 0, -3),
-  new THREE.Vector3(4, 0, 3),
-  new THREE.Vector3(-1, 0, 3),
-  new THREE.Vector3(0, 0, 8),
-  new THREE.Vector3(0, 0, 10.2),
-  new THREE.Vector3(0, 0, 8),
+  new THREE.Vector3(4 * S, 0, -3 * S),
+  new THREE.Vector3(2.5, 0, 3.5),
+  new THREE.Vector3(-1 * S, 0, 3 * S),
+  new THREE.Vector3(0, 0, 8 * S),
+  new THREE.Vector3(0, 0, 10.2 * S),
+  new THREE.Vector3(0, 0, 8 * S),
 ];
 const guardB = new GuardB(scene, waypoints, colliders, game, { partnerCheckIndex: 3, checkCollision });
 const guardObjects = scene.children.filter((c) => !_sceneBeforeGuards.has(c));
@@ -528,10 +593,10 @@ function updateMenuCamera(elapsed) {
 // plays. Tune the start/end points by eye once you see it in-game.
 const INTRO_DURATION = 4;
 let introStartTime = 0;
-const introCamStart = new THREE.Vector3(10, 8, -10);
-const introCamEnd = new THREE.Vector3(-2, 3, -1);
+const introCamStart = new THREE.Vector3(10 * ROOM_SCALE, 8, -10 * ROOM_SCALE);
+const introCamEnd = new THREE.Vector3(-2 * ROOM_SCALE, 3, -1 * ROOM_SCALE);
 const introLookStart = new THREE.Vector3(0, 0, 0);
-const introLookEnd = new THREE.Vector3(-4, 1, -4);
+const introLookEnd = new THREE.Vector3(PLAYER_SPAWN.x, 1, PLAYER_SPAWN.z + 0.3);
 const _introLook = new THREE.Vector3();
 
 function playIntroSequence() {
@@ -626,8 +691,8 @@ function distanceXZ(a, b) {
   return _distTmp.length();
 }
 // ---- Manager's office door ----------------------------------------------
-const OFFICE_DOOR_CLOSED_X = 5;
-const OFFICE_DOOR_OPEN_X = 6.2;     // slides along the inside of the wall beside the doorway
+const OFFICE_DOOR_CLOSED_X = officeDoor.position.x; // read from level1.js so it follows ROOM_SCALE
+const OFFICE_DOOR_OPEN_X = OFFICE_DOOR_CLOSED_X + 1.2; // slides along the inside of the wall beside the doorway
 const OFFICE_DOOR_SLIDE_TIME = 0.6; // seconds
 let officeDoorUnlocked = false;
 const officeDoorAnim = { opening: false, t: 0 };
@@ -680,7 +745,11 @@ function tryUnlockOfficeDoor() {
   return true;
  }
 function tryInteract() {
-  if (currentLevel !== 1) { tryObjective(); return; }
+  if (currentLevel !== 1) {
+    if (levelHandle && levelHandle.missions) levelHandle.missions.interact(player.group.position);
+    else tryObjective();
+    return;
+  }
   const guardAWasDown = guardA.down;
   const hadKey = game.hasKey;
   if (guardA.tryInteract(player.group.position)) {
@@ -699,7 +768,7 @@ function tryInteract() {
   if (tryUnlockOfficeDoor()) return;
   tryPickupKeycard();
 }
-const GUARD_A_LINGER_RANGE = 4;
+const GUARD_A_LINGER_RANGE = 4 * ROOM_SCALE;
 const GUARD_A_LINGER_TIME = 1.2; // seconds of continuous proximity before the line fires
 let guardALingerTimer = 0;
 let hasWarnedGuardAPartner = false;
@@ -728,7 +797,10 @@ function checkOfficesEntry() {
 }
 
 function getInteractPrompt() {
-  if (currentLevel !== 1) return nearObjective() ? LEVEL_CONFIG[currentLevel].objectivePrompt : null;
+  if (currentLevel !== 1) {
+    if (levelHandle && levelHandle.missions) return levelHandle.missions.getPrompt(player.group.position);
+    return nearObjective() ? LEVEL_CONFIG[currentLevel].objectivePrompt : null;
+  }
   const guardPrompt = guardA.getPrompt(player.group.position);
   if (guardPrompt) return guardPrompt;
   if (nearOfficeDoor()) {
@@ -925,10 +997,18 @@ const minimapCanvas = document.getElementById('minimap');
 const minimapRenderer = new THREE.WebGLRenderer({ canvas: minimapCanvas, antialias: true, alpha: true });
 minimapRenderer.setSize(180, 180);
 
-const MINIMAP_VIEW_SIZE = 10;
+const MINIMAP_SIZE_DEFAULT = 10;                          // levels 2/3 (unscaled)
+const MINIMAP_SIZE_LEVEL1 = 10 * ROOM_SCALE;             // keeps the same amount of Level 1 on screen
 const minimapCamera = new THREE.OrthographicCamera(
-  -MINIMAP_VIEW_SIZE, MINIMAP_VIEW_SIZE, MINIMAP_VIEW_SIZE, -MINIMAP_VIEW_SIZE, 0.1, 100
+  -MINIMAP_SIZE_LEVEL1, MINIMAP_SIZE_LEVEL1, MINIMAP_SIZE_LEVEL1, -MINIMAP_SIZE_LEVEL1, 0.1, 100
 );
+function setMinimapViewSize(size) {
+  minimapCamera.left = -size;
+  minimapCamera.right = size;
+  minimapCamera.top = size;
+  minimapCamera.bottom = -size;
+  minimapCamera.updateProjectionMatrix();
+}
 minimapCamera.position.set(0, 30, 0);
 minimapCamera.rotation.x = -Math.PI / 2;
 
@@ -952,6 +1032,10 @@ function animate() {
   } else if (introPlaying) {
     updateIntro(elapsed);
     player.update(dt);
+  } else if (missionUiOpen) {
+    // puzzle overlay open: world is paused, player just idles
+    player.playAction('Idle');
+    player.update(dt);
   } else if (!game.levelComplete && !endScreenVisible()) {
     updateMovement(dt);
     updateCamera();
@@ -963,6 +1047,9 @@ function animate() {
       checkOfficesEntry();
       checkElevator(dt, elapsed);
     } else {
+      if (levelHandle && levelHandle.missions) {
+        levelHandle.missions.update(dt, elapsed, player.group.position, !!keys['e']);
+      }
       checkLevelExit(elapsed);
     }
   }
