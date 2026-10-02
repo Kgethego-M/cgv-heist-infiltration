@@ -1585,19 +1585,22 @@ export function createLevel1(scene) {
   // Offices' own outer walls, so only the west wall and the door wall are new.
   // The door wall has a 1.0m gap centred on MGR.cx, closed by the sliding door.
   const MX = MGR.cx, MZ_DOOR = MGR.door, MX_W = MGR.w, MX_E = MGR.e;
-  const segW = (MX - 0.5) - MX_W; // west edge -> door gap
+  // Doorway is 1.5 m wide (DOOR_HALF = half-width). It was 1.0 m, which left only a ~24 cm window
+  // to walk through given the player's 0.35 m collision radius and no wall sliding.
+  const DOOR_HALF = 0.75;
+  const segW = (MX - DOOR_HALF) - MX_W; // west edge -> door gap
   mgrOffice.add(makeOfficeWall(6 * S, 4, 0.2, MX_W, 2, MGR.cz, Math.PI / 2)); // west wall
   mgrOffice.add(makeOfficeWall(segW, 4, 0.2, MX_W + segW / 2, 2, MZ_DOOR));   // door wall, left of door
   mgrOffice.add(makeOfficeWall(segW, 4, 0.2, MX_E - segW / 2, 2, MZ_DOOR));   // door wall, right of door
-  mgrOffice.add(makeOfficeWall(1.2, 1.6, 0.2, MX, 3.2, MZ_DOOR));             // lintel above the door
+  mgrOffice.add(makeOfficeWall(DOOR_HALF * 2 + 0.2, 1.6, 0.2, MX, 3.2, MZ_DOOR));             // lintel above the door
 
   // Door frame posts either side of the gap
   const doorFrameMat = new THREE.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.7 });
   const frameLeft = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.4, 0.15), doorFrameMat);
-  frameLeft.position.set(MX - 0.55, 1.2, MZ_DOOR);
+  frameLeft.position.set(MX - DOOR_HALF - 0.05, 1.2, MZ_DOOR);
   mgrOffice.add(frameLeft);
   const frameRight = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.4, 0.15), doorFrameMat);
-  frameRight.position.set(MX + 0.55, 1.2, MZ_DOOR);
+  frameRight.position.set(MX + DOOR_HALF + 0.05, 1.2, MZ_DOOR);
   mgrOffice.add(frameRight);
 
   // Sliding door. It sits against the room-side face of the wall so that when
@@ -1605,7 +1608,7 @@ export function createLevel1(scene) {
   // segment instead of clipping through it. The handle is a CHILD of the door
   // so it travels with it (a door and its handle are one moving assembly).
   const officeDoorMat = new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.6 });
-  const officeDoor = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.4, 0.08), officeDoorMat);
+  const officeDoor = new THREE.Mesh(new THREE.BoxGeometry(DOOR_HALF * 2, 2.4, 0.08), officeDoorMat);
   officeDoor.position.set(MX, 1.2, MZ_DOOR + 0.14);
   officeDoor.name = 'officeDoor';
   mgrOffice.add(officeDoor);

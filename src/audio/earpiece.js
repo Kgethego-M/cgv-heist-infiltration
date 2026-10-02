@@ -57,6 +57,13 @@ const LINES = {
 const AUDIO_BASE = './assets/audio/earpiece/';
 const clips = {}; // key -> HTMLAudioElement
 let currentClip = null;
+let clipVolume = 1;
+
+// Called by volume.js when the player changes the volume (squared, to match the other audio).
+export function setEarpieceVolume(v) {
+  clipVolume = Math.max(0, Math.min(1, v)) ** 2;
+  Object.values(clips).forEach((a) => { a.volume = clipVolume; });
+}
 
 // Preload every clip. Missing files just fail silently per-clip (caught
 // individually), so one missing recording doesn't break the rest.
@@ -64,6 +71,7 @@ export function loadEarpieceAudio() {
   Object.entries(LINES).forEach(([key, line]) => {
     const audio = new Audio(AUDIO_BASE + line.file);
     audio.preload = 'auto';
+    audio.volume = clipVolume;
     audio.addEventListener('error', () => {
       console.warn(`[earpiece] missing or unplayable clip for "${key}": ${line.file}`);
     });
@@ -94,6 +102,7 @@ export function playLine(key) {
   const clip = clips[key];
   if (clip) {
     clip.currentTime = 0;
+    clip.volume = clipVolume;
     clip.play().catch(() => {
       // Autoplay/permission errors, or the file genuinely doesn't exist yet.
       // The caption still gets shown by the caller either way.

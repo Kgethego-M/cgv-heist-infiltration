@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { ROOM_SCALE } from './level1.js';
+import { createVisionConeMaterial } from '../fx/shaders.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 // The same shared guard model Level 1 uses. Adjust this path if guards.js lives elsewhere.
 import { getGuardTemplate, loadGuardModel } from '../ai/guards.js';
@@ -1027,9 +1028,7 @@ export function createLevel2(scene, hooks = {}) {
 
   // Cameras — on the side walls, sweeping across the aisles.
   const lensMat = track(new THREE.MeshStandardMaterial({ color: 0xff3333, emissive: 0xff3333, emissiveIntensity: 0.6 }));
-  const coneMat = track(new THREE.MeshBasicMaterial({
-    color: 0xff3333, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false,
-  }));
+  /* cone shader */ // each camera gets its own custom-shader cone (see fx/shaders.js)
   const camDefs = [
     { x: R2.x0 + WALL_T / 2 + 0.05, z: 9,  yaw: Math.PI / 2,  phase: 0 },
     { x: R2.x1 - WALL_T / 2 - 0.05, z: 13, yaw: -Math.PI / 2, phase: 2.1 },
@@ -1037,7 +1036,7 @@ export function createLevel2(scene, hooks = {}) {
   ];
   const cameras = camDefs.map((c) => {
     // each camera gets its own cone material so only the camera that sees you lights up
-    const cam = makeCamera(c.x, 3.3, c.z, c.yaw, c.phase, lensMat, track(coneMat.clone()));
+    const cam = makeCamera(c.x, 3.3, c.z, c.yaw, c.phase, lensMat, track(createVisionConeMaterial({ color: 0xff3333, opacity: 0.12 })));
     maze.add(cam.group);
     return cam;
   });
