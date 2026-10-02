@@ -5,10 +5,24 @@
 // here is short tones/noise bursts built in code.
 
 let ctx = null;
+let master = null;            // EVERY sound (effects + music) goes through this one gain node
+let masterVolume = 1;         // 0..1, set by the player with the - / + keys (see volume.js)
 function getCtx() {
-  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (!ctx) {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createGain();
+    master.gain.value = masterVolume * masterVolume;     // squared: closer to how loudness is perceived
+    master.connect(ctx.destination);
+  }
   return ctx;
 }
+export function getMasterNode() { getCtx(); return master; }
+export function setMasterVolume(v) {
+  masterVolume = Math.max(0, Math.min(1, v));
+  if (master) master.gain.value = masterVolume * masterVolume;
+}
+export function getMasterVolume() { return masterVolume; }
+export function getAudioContext() { return getCtx(); }
 
 // Call this from the same click that unlocks pointer lock, same reasoning
 // as loadEarpieceAudio(): a fresh AudioContext starts 'suspended' until a
@@ -29,7 +43,7 @@ function playTone({ freq = 440, duration = 0.15, type = 'sine', gain = 0.2, freq
   g.gain.setValueAtTime(0.0001, t0);
   g.gain.linearRampToValueAtTime(gain, t0 + 0.01);
   g.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
-  osc.connect(g).connect(ac.destination);
+  osc.connect(g).connect(getMasterNode());
   osc.start(t0);
   osc.stop(t0 + duration + 0.02);
 }
@@ -52,7 +66,7 @@ function playNoiseBurst({ duration = 0.08, gain = 0.15, filterFreq = 1200, delay
   filter.frequency.value = filterFreq;
   const g = ac.createGain();
   g.gain.value = gain;
-  src.connect(filter).connect(g).connect(ac.destination);
+  src.connect(filter).connect(g).connect(getMasterNode());
   src.start(t0);
 }
 

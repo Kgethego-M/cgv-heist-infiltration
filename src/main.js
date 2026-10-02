@@ -6,6 +6,9 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import { GuardA, GuardB, loadGuardModel } from './ai/guards.js';
 import { Player, loadPlayerModel } from './player/player.js';
 import { loadEarpieceAudio, playLine } from './audio/earpiece.js';
+import { fxTime } from './fx/shaders.js';
+import { startMusic, setMusicLevel, setMusicIntensity } from './audio/music.js';
+import './audio/volume.js';   // - / + keys set the master volume
 import {
   resumeAudioContext, playTakedownThud, playKeyPickup, playKeycardPickup,
   playDoorUnlock, playDoorDenied, playElevatorDing, playWinSting, playLoseSting,
@@ -201,14 +204,14 @@ const game = {
     showLine(reason === 'partner_found' ? 'alarmPartnerFound' : 'alarmSpotted');
   },
 
-    onCaught(reason = 'caught') {
+    onCaught(reason = 'caught', customMessage = null) {
     if (this.levelComplete || endScreenVisible()) return;
     controls.unlock();
     stopAlarmKlaxon();
     stopHeartbeat();
     playLoseSting();
-    const line = playLine(reason === 'timeout' ? 'timeout' : 'caught');
-    const message = line || (reason === 'timeout'
+    const line = customMessage ? '' : playLine(reason === 'timeout' ? 'timeout' : 'caught');
+    const message = customMessage || line || (reason === 'timeout'
       ? 'The escape window closed — security caught you at the elevator.'
       : 'A guard caught you before you reached the elevator.');
     showEndScreen(false, message);
@@ -345,6 +348,9 @@ const LEVEL_CONFIG = {
 // Passed to createLevel2 so the level can drive subtitles, sounds, the pointer-lock
 // handoff for puzzle UIs, and mark the level objective complete.
 const missionHooks = {
+  game,                                                   // shared state (alarm, escape clock) for level update loops
+  triggerAlarm: (reason) => game.triggerAlarm(reason),
+  onCaught: (reason, message) => game.onCaught(reason, message),
   onSubtitle: (text, ms) => showSubtitle(text, ms),
   onUiChange: (open, relock) => setMissionUiOpen(open, relock),
   onObjectiveComplete: () => { game.objectiveComplete = true; },
@@ -404,6 +410,7 @@ function loadLevel(n) {
     colliders.push(...level1Colliders);
     setGuardsVisible(true);
     resetLevel1(); // repositions player, resets guards/items/doors/ambient
+    setMusicLevel(1);
     return;
   }
 
@@ -423,6 +430,7 @@ function loadLevel(n) {
   player.group.rotation.y = 0;          // levels 2/3 run toward +z
   camera.rotation.set(0, Math.PI, 0);   // camera behind the player, looking +z
   showSubtitle(`Level ${n} — ${cfg.name}`, 4000);
+  setMusicLevel(n);
 }
 
 function objectiveSpot() {
@@ -492,7 +500,7 @@ let colliderMeshes = [];
 const _boxCache = new WeakMap();
 const _testPoint = new THREE.Vector3();
 function colliderBox(mesh) {
-  if (currentLevel === 3) return new THREE.Box3().setFromObject(mesh); // level 3 not cached (unknown if anything moves); level 2's colliders are static
+  /* level3-cache */ // level 3 colliders are static, so they use the same cache as level 1
   let box = _boxCache.get(mesh);
   if (!box) {
     box = new THREE.Box3().setFromObject(mesh);
@@ -566,6 +574,7 @@ startBtn.addEventListener('click', () => {
   mainMenuEl.style.display = 'none';
   inMenu = false;
   controls.lock(); // this click is the required user gesture for both pointer lock and audio
+  startMusic(currentLevel);
   resumeAudioContext();
   playIntroSequence();
 });
@@ -692,7 +701,7 @@ function distanceXZ(a, b) {
 }
 // ---- Manager's office door ----------------------------------------------
 const OFFICE_DOOR_CLOSED_X = officeDoor.position.x; // read from level1.js so it follows ROOM_SCALE
-const OFFICE_DOOR_OPEN_X = OFFICE_DOOR_CLOSED_X + 1.2; // slides along the inside of the wall beside the doorway
+const OFFICE_DOOR_OPEN_X = OFFICE_DOOR_CLOSED_X + 1.7; // door is 1.5 m wide now, so it slides further to clear the opening // slides along the inside of the wall beside the doorway
 const OFFICE_DOOR_SLIDE_TIME = 0.6; // seconds
 let officeDoorUnlocked = false;
 const officeDoorAnim = { opening: false, t: 0 };
@@ -1018,6 +1027,14 @@ function updateMinimap() {
   minimapRenderer.render(scene, minimapCamera);
 }
 
+// Player stance for Level 3's lasers and guards: lower = harder to hit / spot.
+function currentStance() {
+  if (isProne) return 'prone';
+  if (keys['control']) return 'crouch';
+  if (keys['shift']) return 'sprint';
+  return 'stand';
+}
+
 // MAIN LOOP
 const clock = new THREE.Clock();
 
@@ -1025,6 +1042,7 @@ function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.elapsedTime;
+  fxTime.value = elapsed; // drives every custom shader's time uniform
 
     if (inMenu) {
     updateMenuCamera(elapsed);
@@ -1050,6 +1068,9 @@ function animate() {
       if (levelHandle && levelHandle.missions) {
         levelHandle.missions.update(dt, elapsed, player.group.position, !!keys['e']);
       }
+      if (levelHandle && levelHandle.update) {
+        levelHandle.update(dt, elapsed, player.group.position, currentStance());
+      }
       checkLevelExit(elapsed);
     }
   }
@@ -1068,8 +1089,22 @@ function animate() {
     ambient.intensity = 0.35 + pulse * 0.55;
   }
   updateAlarmBeacon(elapsed);
+  // soundtrack reacts to the game: calm -> tense as alarms / guard detection rise
+  if (!inMenu) setMusicIntensity(game.alarmActive ? 1 : ((levelHandle && levelHandle.threat) || 0));
 
   renderer.render(scene, camera);
   updateMinimap();
 }
 animate();
+
+// ---- QA level jump (only active when the page is opened with ?debug) -------------
+// Click Start Mission, wait until you can move, then press 1, 2 or 3.
+if (new URLSearchParams(location.search).has('debug')) {
+  window.addEventListener('keydown', (e) => {
+    if (e.repeat || inMenu) return;
+    if (e.key === '1' || e.key === '2' || e.key === '3') {
+      loadLevel(Number(e.key));
+      console.log('[debug] jumped to level', e.key);
+    }
+  });
+}
