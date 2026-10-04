@@ -201,7 +201,7 @@ const game = {
       return 250 + frac * 550;
     });
 
-    showLine(reason === 'partner_found' ? 'alarmPartnerFound' : 'alarmSpotted');
+    showLine(reason === 'partner_found' ? 'alarmPartnerFound' : reason === 'vault' ? 'l3Theft' : 'alarmSpotted');
   },
 
     onCaught(reason = 'caught', customMessage = null) {
@@ -334,9 +334,9 @@ const LEVEL_CONFIG = {
   3: {
     name: 'Vault Wing',
     create: createLevel3,
-    ambient: { color: 0x14141a, intensity: 0.2 },
+    ambient: { color: 0x2a2a34, intensity: 0.5 },     // was 0x14141a / 0.2 - too dark now that the wing has mazes and a tile vault
     background: 0x050508,
-    light: { color: 0xffb060, intensity: 4, distance: 6 },
+    light: { color: 0xffb060, intensity: 7, distance: 9 },   // was 4 / 6
     objectiveKey: 'vaultItemPosition',
     objectiveMarker: 'marker_vaultItem',
     objectivePrompt: '[E] Take the artifact',
@@ -354,12 +354,34 @@ const missionHooks = {
   onSubtitle: (text, ms) => showSubtitle(text, ms),
   onUiChange: (open, relock) => setMissionUiOpen(open, relock),
   onObjectiveComplete: () => { game.objectiveComplete = true; },
+  clearAlarm: () => clearAlarm(),                          // level 3 checkpoint reload: alarm off again
+  // sliding doors: `colliders` is main's own list (copied from the level at load), so doors are added/removed here
+  removeCollider: (m) => { const i = colliders.indexOf(m); if (i >= 0) colliders.splice(i, 1); },
+  addCollider: (m) => { if (!colliders.includes(m)) colliders.push(m); },
+  line: (key, ms) => showLine(key, ms),                    // earpiece voice line + caption
   sfx: {
     pickup: () => playKeycardPickup(),
     unlock: () => playDoorUnlock(),
     denied: () => playDoorDenied(),
   },
 };
+// Undo game.triggerAlarm (klaxon, heartbeat, red lights). Level 3 uses this when a checkpoint
+// from before the theft is reloaded.
+function clearAlarm() {
+  game.alarmActive = false;
+  game.alarmReason = null;
+  game.escapeTimeRemaining = null;
+  stopAlarmKlaxon();
+  stopHeartbeat();
+  beaconLight.intensity = 0;
+  elevatorIndicatorMat.emissive.setHex(ELEVATOR_IDLE_COLOR);
+  const cfg = LEVEL_CONFIG[currentLevel];
+  if (cfg) {
+    ambient.color.setHex(cfg.ambient.color);
+    ambient.intensity = cfg.ambient.intensity;
+    scene.background.setHex(cfg.background);
+  }
+}
 const OBJECTIVE_INTERACT_DISTANCE = 2.0;
 const LEVEL_EXIT_RADIUS = 1.3; // levels 2+ (level 1 uses ELEVATOR_REACH_DISTANCE)
 
@@ -520,10 +542,11 @@ function checkCollision(x, z) {
     [-PLAYER_RADIUS * 0.7, -PLAYER_RADIUS * 0.7],
   ];
   const heights = [0.3, 0.9, 1.5];
+  const baseY = player.group.position.y;   // levels with stairs (level 3): test relative to the floor you're standing on
   
   for (let [ox, oz] of offsets) {
     for (let h of heights) {
-      _testPoint.set(x + ox, h, z + oz);
+      _testPoint.set(x + ox, baseY + h, z + oz);
       for (let i = 0; i < colliders.length; i++) {
         if (colliderBox(colliders[i]).containsPoint(_testPoint)) return true;
       }
@@ -1056,6 +1079,10 @@ function animate() {
     player.update(dt);
   } else if (!game.levelComplete && !endScreenVisible()) {
     updateMovement(dt);
+    if (levelHandle && levelHandle.getFloorHeight) {   // level 3: stairs up to the roof, tiles that collapse
+      const pp = player.group.position;
+      pp.y += (levelHandle.getFloorHeight(pp.x, pp.z) - pp.y) * Math.min(1, dt * 14);
+    }
     updateCamera();
     player.update(dt);
     if (currentLevel === 1) {

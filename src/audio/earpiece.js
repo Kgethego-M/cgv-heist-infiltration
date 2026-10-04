@@ -42,6 +42,23 @@ const LINES = {
     text: '"Doors are open \u2014 go, go!"',
     file: 'elevator-win.mp3',
   },
+  // ---- level 3 (vault wing) ----
+  l3VaultOpen: {
+    text: '"The vault\u2019s open \u2014 the floor is rigged. Watch the tiles, I\u2019m only going to light that path once."',
+    file: 'l3-vault-open.mp3',
+  },
+  l3Theft: {
+    text: '"You\u2019ve got it \u2014 and they know. Take the back door, I\u2019m sending you the building plans. Get to the roof!"',
+    file: 'l3-theft.mp3',
+  },
+  l3Stairs: {
+    text: '"Good, you\u2019re on the upper floor. One more flight and you\u2019re on the roof \u2014 keep moving!"',
+    file: 'l3-stairs.mp3',
+  },
+  l3Roof: {
+    text: '"I\u2019ve got eyes on you \u2014 we\u2019re right here. Over to the pad, quick!"',
+    file: 'l3-roof.mp3',
+  },
   caught: {
     text: '"You\u2019ve been caught \u2014 resetting the mission."',
     file: 'caught.mp3',
