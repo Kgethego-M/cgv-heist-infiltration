@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
-import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
 const loader = new GLTFLoader();
 loader.setMeshoptDecoder(MeshoptDecoder);
@@ -15,12 +14,13 @@ export async function loadPlayerModel(url = './assets/models/player_character.gl
 const MODEL_YAW_OFFSET = 0;
 
 export class Player {
-   constructor(scene, gltf) {
+  constructor(scene, gltf, renderer = null) {
     this.group = new THREE.Group();
     this.group.name = 'Player';
 
     this.model = gltf.scene;
     this.model.rotation.y = MODEL_YAW_OFFSET;
+    this._stabilizeModel(renderer);
     this.group.add(this.model);
 
     this.mixer = new THREE.AnimationMixer(this.model);
@@ -32,6 +32,35 @@ export class Player {
 
     this.playAction('Idle');
     scene.add(this.group);
+  }
+
+  _stabilizeModel(renderer) {
+    const maxAniso = renderer ? renderer.capabilities.getMaxAnisotropy() : 4;
+
+    this.model.traverse((obj) => {
+      if (!obj.isMesh) return;
+
+      // Skinned meshes use bind-pose bounds, so culling makes parts vanish
+      obj.frustumCulled = false;
+
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach((mat) => {
+        if (!mat) return;
+
+        const looksLikeHair = /hair|lash|brow|beard/i.test(mat.name + ' ' + obj.name);
+        if (looksLikeHair || (mat.transparent && mat.map)) {
+          mat.transparent = false;
+          mat.alphaTest = 0.5;
+          mat.depthWrite = true;
+          mat.side = THREE.DoubleSide;
+        }
+
+        ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']
+          .forEach((k) => { if (mat[k]) mat[k].anisotropy = maxAniso; });
+
+        mat.needsUpdate = true;
+      });
+    });
   }
 
   playAction(name, fadeTime = 0.2) {
