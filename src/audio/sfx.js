@@ -6,22 +6,40 @@
 
 let ctx = null;
 let master = null;            // EVERY sound (effects + music) goes through this one gain node
+let sfxBus = null;            // footsteps / keys / doors / stings — the "Sound Effects" slider
+let musicBus = null;          // the procedural score — the "Music" slider
 let masterVolume = 1;         // 0..1, set by the player with the - / + keys (see volume.js)
+let sfxVolume = 1;            // 0..1, "Sound Effects" in Settings
+let musicVolume = 1;          // 0..1, "Music" in Settings
 function getCtx() {
   if (!ctx) {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     master = ctx.createGain();
     master.gain.value = masterVolume * masterVolume;     // squared: closer to how loudness is perceived
     master.connect(ctx.destination);
+    sfxBus = ctx.createGain();  sfxBus.gain.value = sfxVolume;   sfxBus.connect(master);
+    musicBus = ctx.createGain(); musicBus.gain.value = musicVolume; musicBus.connect(master);
   }
   return ctx;
 }
 export function getMasterNode() { getCtx(); return master; }
+export function getSfxNode() { getCtx(); return sfxBus; }
+export function getMusicNode() { getCtx(); return musicBus; }
 export function setMasterVolume(v) {
   masterVolume = Math.max(0, Math.min(1, v));
   if (master) master.gain.value = masterVolume * masterVolume;
 }
 export function getMasterVolume() { return masterVolume; }
+export function setSfxVolume(v) {
+  sfxVolume = Math.max(0, Math.min(1, v));
+  if (sfxBus) sfxBus.gain.value = sfxVolume;
+}
+export function getSfxVolume() { return sfxVolume; }
+export function setMusicVolume(v) {
+  musicVolume = Math.max(0, Math.min(1, v));
+  if (musicBus) musicBus.gain.value = musicVolume;
+}
+export function getMusicVolume() { return musicVolume; }
 export function getAudioContext() { return getCtx(); }
 
 // Call this from the same click that unlocks pointer lock, same reasoning
@@ -43,7 +61,7 @@ function playTone({ freq = 440, duration = 0.15, type = 'sine', gain = 0.2, freq
   g.gain.setValueAtTime(0.0001, t0);
   g.gain.linearRampToValueAtTime(gain, t0 + 0.01);
   g.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
-  osc.connect(g).connect(getMasterNode());
+  osc.connect(g).connect(getSfxNode());
   osc.start(t0);
   osc.stop(t0 + duration + 0.02);
 }
@@ -66,11 +84,50 @@ function playNoiseBurst({ duration = 0.08, gain = 0.15, filterFreq = 1200, delay
   filter.frequency.value = filterFreq;
   const g = ac.createGain();
   g.gain.value = gain;
-  src.connect(filter).connect(g).connect(getMasterNode());
+  src.connect(filter).connect(g).connect(getSfxNode());
   src.start(t0);
 }
 
 // ---- One-shot event sounds ------------------------------------------------
+
+// Footstep: a soft, muffled thump. The building is meant to be quiet, so these
+// sit well below the event stings. `gain` scales with stance (sprint louder than
+// a crouch), `pan` alternates -1/+1 for left/right, and `bright` opens the
+// lowpass a touch so a sprint reads as quicker heel-strikes than a crawl.
+export function playFootstep({ gain = 0.06, pan = 0, bright = 700 } = {}) {
+  const ac = getCtx();
+  const t0 = ac.currentTime;
+  const bufferSize = Math.max(1, Math.floor(ac.sampleRate * 0.09));
+  const buffer = ac.createBuffer(1, bufferSize, ac.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    const env = Math.pow(1 - i / bufferSize, 2.2);          // fast attack, quick decay
+    data[i] = (Math.random() * 2 - 1) * env;
+  }
+  const src = ac.createBufferSource();
+  src.buffer = buffer;
+  const lp = ac.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = bright;
+  const body = ac.createOscillator();                       // a little low thud under the noise
+  body.type = 'sine';
+  body.frequency.setValueAtTime(120, t0);
+  body.frequency.exponentialRampToValueAtTime(60, t0 + 0.07);
+  const bg = ac.createGain();
+  bg.gain.setValueAtTime(gain * 0.8, t0);
+  bg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
+  const g = ac.createGain();
+  g.gain.value = gain;
+  let tail = g;
+  if (ac.createStereoPanner) {                              // alternate feet left/right
+    const p = ac.createStereoPanner(); p.pan.value = pan * 0.35;
+    g.connect(p); tail = p;
+  }
+  src.connect(lp).connect(g);
+  body.connect(bg).connect(tail);
+  tail.connect(getSfxNode());
+  src.start(t0);
+  body.start(t0); body.stop(t0 + 0.1);
+}
 
 export function playTakedownThud() {
   playTone({ freq: 90, freqEnd: 42, duration: 0.22, type: 'sine', gain: 0.35 });

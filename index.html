@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <title>Heist Infiltration</title>
     <style>
-      body { margin: 0; overflow: hidden; }
+      body { margin: 0; overflow: hidden; background: #05070a; }
       canvas { display: block; }
       #prompt, #subtitle {
         position: absolute; left: 50%; transform: translateX(-50%);
@@ -13,7 +13,7 @@
       }
       #prompt { bottom: 18%; font-size: 20px; }
       #subtitle { bottom: 8%; font-style: italic; font-size: 16px; color: #cfe3ff; }
-            #endScreen {
+      #endScreen {
         position: absolute; top: 0; left: 0; width: 100%; height: 100%;
         display: none; flex-direction: column; align-items: center; justify-content: center;
         background: rgba(0,0,0,0.78); color: #eee; font-family: sans-serif;
@@ -24,19 +24,179 @@
       #endScreen.lose h1 { color: #e05252; }
       #endScreen p { font-size: 18px; color: #cfe3ff; margin: 6px 0; }
       #endScreen .hint { font-size: 14px; color: #8899bb; margin-top: 26px; }
+      /* Full-screen fade used by the drop-off cinematic hand-off. */
+      #fade {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        background: #000; opacity: 0; pointer-events: none; z-index: 30;
+      }
+      #skipHint {
+        position: absolute; bottom: 5%; left: 50%; transform: translateX(-50%);
+        color: rgba(255,255,255,0.55); font-family: sans-serif; font-size: 13px;
+        letter-spacing: 2px; text-transform: uppercase; pointer-events: none;
+        display: none; z-index: 25;
+      }
+
+      /* ---------- Shared menu / overlay chrome (Zelda-BotW-inspired) ---------- */
+      .overlay {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        z-index: 20; color: #e8e2d0; font-family: Georgia, 'Times New Roman', serif;
+        user-select: none;
+      }
+      /* Main menu backdrop is generated key-art (the operative sizing up the
+         target building, guards outside) — not the live scene. A soft scrim on
+         top keeps the title / options legible over the art. */
+      #mainMenu {
+        background:
+          linear-gradient(rgba(4,6,10,0.30), rgba(4,6,10,0.44)),
+          radial-gradient(ellipse at 40% 45%, rgba(4,6,10,0.08) 0%, rgba(4,6,10,0.42) 68%, rgba(3,4,7,0.78) 100%),
+          url('./assets/ui/menu_keyart.png') center / cover no-repeat;
+      }
+      /* Pause: a light scrim so the frozen gameplay frame stays clearly visible. */
+      #pauseOverlay { background: rgba(4,6,9,0.52); backdrop-filter: blur(1.5px); }
+      #settingsPanel { background: rgba(4,6,9,0.80); z-index: 26; }
+
+      .hi-title { text-align: center; letter-spacing: 6px; text-shadow: 0 2px 14px rgba(0,0,0,0.8); }
+      .hi-title .kicker { font-size: 13px; letter-spacing: 8px; color: #b9b2a0; margin-bottom: 6px; }
+      .hi-title .big { font-size: 62px; line-height: 1; font-weight: 600; color: #efe9d8; }
+      .hi-title .sub { font-size: 24px; letter-spacing: 12px; color: #cfc8b4; margin-top: 8px; }
+      .hi-rule { width: 220px; height: 1px; margin: 18px auto 0;
+        background: linear-gradient(90deg, transparent, rgba(232,226,208,0.7), transparent); }
+
+      .menu-list { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 30px; }
+      .menu-item {
+        font-family: Georgia, serif; font-variant: small-caps; letter-spacing: 3px;
+        font-size: 21px; color: #d8d2c0; background: none; border: 1px solid transparent;
+        cursor: pointer; padding: 7px 34px; position: relative; opacity: 0.85;
+        transition: color .12s ease, background .12s ease;
+      }
+      .menu-item:hover { color: #fff; opacity: 1; }
+      .menu-item.selected {
+        color: #fff; opacity: 1;
+        background: linear-gradient(90deg, rgba(232,226,208,0.06), rgba(232,226,208,0.16), rgba(232,226,208,0.06));
+        border-color: rgba(232,226,208,0.65); border-radius: 2px;
+      }
+      .menu-item.selected::before, .menu-item.selected::after {
+        content: ''; position: absolute; top: 50%; width: 7px; height: 7px;
+        background: #e8e2d0; transform: translateY(-50%) rotate(45deg);
+      }
+      .menu-item.selected::before { left: 8px; }
+      .menu-item.selected::after { right: 8px; }
+      .menu-item[hidden] { display: none; }
+      .pause-hint {
+        margin-top: 22px; color: rgba(232,226,208,0.55); font-size: 13px;
+        letter-spacing: 3px; font-variant: small-caps;
+      }
+
+      .version {
+        position: absolute; bottom: 10px; right: 14px; color: rgba(232,226,208,0.5);
+        font: 11px Georgia, serif; letter-spacing: 1px; text-align: right; line-height: 1.5;
+      }
+
+      /* In-game pause button (top-left HUD). */
+      #pauseBtn {
+        position: absolute; top: 14px; left: 14px; z-index: 6;
+        background: rgba(0,0,0,0.45); color: #e8e2d0;
+        border: 1px solid rgba(232,226,208,0.4); border-radius: 4px;
+        padding: 6px 14px; font-family: Georgia, serif; font-variant: small-caps;
+        letter-spacing: 2px; font-size: 14px; cursor: pointer; display: none;
+      }
+      #pauseBtn:hover { background: rgba(0,0,0,0.65); }
+
+      /* Settings card */
+      .settings-card {
+        width: min(440px, 92vw); background: rgba(12,15,20,0.92);
+        border: 1px solid rgba(232,226,208,0.28); border-radius: 6px;
+        padding: 24px 28px; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+      }
+      .settings-card h2 {
+        margin: 0 0 4px; font-size: 26px; letter-spacing: 5px; font-variant: small-caps;
+        color: #efe9d8; text-align: center; font-weight: 600;
+      }
+      .settings-card .sub { text-align: center; color: #9a937f; font-size: 12px; letter-spacing: 2px; margin-bottom: 18px; }
+      .vol-row { display: flex; align-items: center; gap: 12px; margin: 14px 0; }
+      .vol-row label { width: 118px; font-variant: small-caps; letter-spacing: 2px; font-size: 15px; color: #d8d2c0; }
+      .vol-row input[type=range] { flex: 1; accent-color: #cfc8b4; }
+      .vol-row .val { width: 44px; text-align: right; font-size: 13px; color: #b9b2a0; }
+      .sfx-preview { margin-top: 18px; border-top: 1px solid rgba(232,226,208,0.15); padding-top: 14px; }
+      .sfx-preview .lbl { font-variant: small-caps; letter-spacing: 2px; font-size: 14px; color: #b9b2a0; margin-bottom: 10px; }
+      .sfx-btns { display: flex; gap: 10px; flex-wrap: wrap; }
+      .sfx-btns button {
+        font-family: Georgia, serif; font-variant: small-caps; letter-spacing: 1px; font-size: 13px;
+        color: #d8d2c0; background: rgba(232,226,208,0.08); border: 1px solid rgba(232,226,208,0.3);
+        border-radius: 3px; padding: 6px 12px; cursor: pointer;
+      }
+      .sfx-btns button:hover { background: rgba(232,226,208,0.18); color: #fff; }
+      .settings-back {
+        display: block; margin: 20px auto 0; font-family: Georgia, serif; font-variant: small-caps;
+        letter-spacing: 3px; font-size: 16px; color: #efe9d8; background: none;
+        border: 1px solid rgba(232,226,208,0.5); border-radius: 2px; padding: 7px 30px; cursor: pointer;
+      }
+      .settings-back:hover { background: rgba(232,226,208,0.12); }
     </style>
   </head>
   <body>
 
-    <div id="mainMenu" style="position:absolute; top:0; left:0; width:100%; height:100%;
-      background:linear-gradient(rgba(0,0,0,0.75),rgba(0,0,0,0.92));
-      display:flex; flex-direction:column; align-items:center; justify-content:center;
-      color:white; font-family:sans-serif; z-index:20;">
-      <div style="letter-spacing:3px; color:#5a8f5a; font-size:13px; margin-bottom:8px;">CLASSIFIED // PROJECT PITCH</div>
-      <h1 style="font-size:48px; margin:0 0 10px 0;">HEIST INFILTRATION</h1>
-      <div style="color:#aaa; margin-bottom:30px;">Level 1: The Lobby Job</div>
-      <button id="startBtn" disabled style="padding:14px 40px; font-size:18px; background:#2b6b3f;
-        color:white; border:none; border-radius:6px; cursor:pointer; opacity:0.6;">Loading...</button>
+    <!-- ============ MAIN MENU (Zelda-style: title + vertical options) ============ -->
+    <div id="mainMenu" class="overlay">
+      <div class="hi-title">
+        <div class="kicker">A STEALTH OPERATION</div>
+        <div class="big">HEIST</div>
+        <div class="sub">INFILTRATION</div>
+        <div class="hi-rule"></div>
+      </div>
+      <div class="menu-list" id="menuList">
+        <button class="menu-item" id="menuContinue" hidden>Continue</button>
+        <button class="menu-item selected" id="menuNewGame">New Game</button>
+        <button class="menu-item" id="menuSettings">Settings</button>
+      </div>
+      <div class="version">Ver 1.0<br>&copy; CGV Studios</div>
+    </div>
+
+    <!-- ============ PAUSE OVERLAY (frozen gameplay frame shows through) ============ -->
+    <div id="pauseOverlay" class="overlay" style="display:none;">
+      <div class="hi-title">
+        <div class="big" style="font-size:44px;">PAUSED</div>
+        <div class="hi-rule"></div>
+      </div>
+      <div class="menu-list" id="pauseList">
+        <button class="menu-item selected" id="pauseResume">Resume</button>
+        <button class="menu-item" id="pauseSettings">Settings</button>
+        <button class="menu-item" id="pauseQuit">Quit to Main Menu</button>
+      </div>
+      <div class="pause-hint">P &mdash; Resume</div>
+    </div>
+
+    <!-- ============ SETTINGS (reachable from menu AND pause) ============ -->
+    <div id="settingsPanel" class="overlay" style="display:none;">
+      <div class="settings-card">
+        <h2>Settings</h2>
+        <div class="sub">VOLUME</div>
+        <div class="vol-row">
+          <label for="volMaster">Master</label>
+          <input type="range" id="volMaster" min="0" max="100" value="100" />
+          <span class="val" id="volMasterVal">100%</span>
+        </div>
+        <div class="vol-row">
+          <label for="volMusic">Music</label>
+          <input type="range" id="volMusic" min="0" max="100" value="100" />
+          <span class="val" id="volMusicVal">100%</span>
+        </div>
+        <div class="vol-row">
+          <label for="volSfx">Sound Effects</label>
+          <input type="range" id="volSfx" min="0" max="100" value="100" />
+          <span class="val" id="volSfxVal">100%</span>
+        </div>
+        <div class="sfx-preview">
+          <div class="lbl">Preview sound effects</div>
+          <div class="sfx-btns">
+            <button id="prevFootstep">Footsteps</button>
+            <button id="prevKey">Key pickup</button>
+            <button id="prevDoor">Door unlock</button>
+          </div>
+        </div>
+        <button class="settings-back" id="settingsBack">Back</button>
+      </div>
     </div>
 
     <div id="controlsPanel" style="position:absolute; top:20px; right:20px; background:rgba(0,0,0,0.55); color:#eee; font-family:sans-serif; font-size:13px; padding:12px 16px; border-radius:8px; line-height:1.6; z-index:5;">
@@ -51,13 +211,16 @@
       <div>V — Toggle camera view</div>
       <div>M — Music on/off</div>
       <div>- / + — Volume</div>
+      <div>P / Esc — Pause</div>
     </div>
+
+    <button id="pauseBtn">&#10074;&#10074; Pause</button>
 
     <canvas id="minimap" style="position:absolute; bottom:20px; right:20px; width:180px; height:180px; border:2px solid rgba(255,255,255,0.6); border-radius:50%; z-index:5;"></canvas>
 
     <div id="blocker" style="
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-      display: flex; align-items: center; justify-content: center;
+      display: none; align-items: center; justify-content: center;
       background: rgba(0,0,0,0.7); color: white; font-family: sans-serif;
       cursor: pointer; z-index: 10;
     ">
@@ -69,6 +232,9 @@
          earpiece system (voice + audio) later. -->
     <div id="prompt"></div>
     <div id="subtitle"></div>
+    <!-- Cinematic fade-to-black + skip prompt for the opening drop-off -->
+    <div id="fade"></div>
+    <div id="skipHint">Press any key to skip</div>
         <!-- Win/lose overlay — restart happens in place, no page refresh -->
     <div id="endScreen">
       <h1 id="endTitle"></h1>

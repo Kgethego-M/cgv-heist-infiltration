@@ -222,3 +222,71 @@ export function createHologramMaterial(color = 0xffcc33) {
     transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
   });
 }
+
+// ============================================================
+// CINEMATIC GRADE PASS  (post-processing, used by main.js's EffectComposer)
+//
+// A single full-screen ShaderPass that sells the "film" look on top of the
+// bloom + depth-of-field chain: soft vignette, animated film grain, a touch of
+// edge chromatic aberration, and gentle S-curve contrast + saturation. Runs
+// in linear space before OutputPass does tone mapping, so it stays cheap.
+// uTime is advanced by main.js each frame (drives the grain animation).
+// ============================================================
+export const CinematicGradeShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTime: { value: 0 },
+    uVignette: { value: 1.0 },     // 0 = off, 1 = full strength
+    uGrain: { value: 0.06 },       // grain amplitude
+    uAberration: { value: 0.0022 },// RGB fringing at the frame edges
+    uSaturation: { value: 1.08 },
+    uContrast: { value: 1.06 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUvG;
+    void main() {
+      vUvG = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform float uVignette;
+    uniform float uGrain;
+    uniform float uAberration;
+    uniform float uSaturation;
+    uniform float uContrast;
+    varying vec2 vUvG;
+
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
+
+    void main() {
+      vec2 uv = vUvG;
+      vec2 c = uv - 0.5;
+      float r2 = dot(c, c);
+
+      // Chromatic aberration grows toward the corners.
+      vec2 off = c * uAberration * (0.4 + r2 * 2.0);
+      vec3 col;
+      col.r = texture2D(tDiffuse, uv + off).r;
+      col.g = texture2D(tDiffuse, uv).g;
+      col.b = texture2D(tDiffuse, uv - off).b;
+
+      // S-curve contrast around mid-grey, then saturation.
+      col = clamp((col - 0.5) * uContrast + 0.5, 0.0, 1.0);
+      float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col = mix(vec3(l), col, uSaturation);
+
+      // Animated film grain (per-pixel, per-frame).
+      float g = hash(uv * vec2(1920.0, 1080.0) + fract(uTime) * 137.0) - 0.5;
+      col += g * uGrain;
+
+      // Vignette.
+      float vig = smoothstep(0.95, 0.25, r2 * 1.6);
+      col *= mix(1.0, vig, uVignette);
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+};

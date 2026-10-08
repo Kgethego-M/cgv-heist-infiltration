@@ -3,16 +3,18 @@ import { createLevel1, ELEVATOR_IDLE_COLOR, ELEVATOR_ALARM_COLOR, ROOM_SCALE } f
 import { createLevel2 } from './levels/level2.js';
 import { createLevel3 } from './levels/level3.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-import { GuardA, GuardB, loadGuardModel } from './ai/guards.js';
-import { Player, loadPlayerModel } from './player/player.js';
+import { GuardA, GuardB, loadGuardModel, attachGuardClip } from './ai/guards.js';
+import { Player, loadPlayerModel, attachPlayerClip } from './player/player.js';
 import { loadEarpieceAudio, playLine } from './audio/earpiece.js';
 import { fxTime } from './fx/shaders.js';
+import { createDropoff } from './scene/dropoff.js';
 import { startMusic, setMusicLevel, setMusicIntensity } from './audio/music.js';
 import './audio/volume.js';   // - / + keys set the master volume
+import { setChannelVolume, getChannelVolume } from './audio/volume.js';
 import {
   resumeAudioContext, playTakedownThud, playKeyPickup, playKeycardPickup,
   playDoorUnlock, playDoorDenied, playElevatorDing, playWinSting, playLoseSting,
-  startAlarmKlaxon, stopAlarmKlaxon, startHeartbeat, stopHeartbeat,
+  startAlarmKlaxon, stopAlarmKlaxon, startHeartbeat, stopHeartbeat, playFootstep,
 } from './audio/sfx.js';
 
 // 1. Scene
@@ -49,8 +51,27 @@ controls.addEventListener('lock', () => {
 // must stay hidden. Declared here (not further down) because the top-level await
 // below means events can fire before later declarations run.
 let missionUiOpen = false;
+// True while the opening drop-off cinematic owns the camera. Declared up here
+// (like missionUiOpen) because the unlock handler below can fire during the
+// top-level await, and the cinematic deliberately runs with the pointer
+// unlocked so the mouse-look "click to look" blocker must stay hidden.
+let dropoffActive = false;
+// True while the pause overlay owns the screen (pointer unlocked on purpose).
+// Declared up here with the other UI-state flags so the unlock handler below
+// can suppress the "click to look around" blocker while paused / in a menu.
+let paused = false;
+let settingsOpen = false;
+let inMenu = true;   // main menu owns the screen (also declared-early for the unlock handler)
+let modelsReady = false;    // player/guards loaded — New Game becomes clickable
+let sessionStarted = false; // a mission run exists — main menu shows Continue
 controls.addEventListener('unlock', () => {
-  if (!missionUiOpen) blocker.style.display = 'flex';
+  // Losing pointer lock mid-game (Esc, alt-tab, etc.) now opens the PAUSE menu
+  // instead of the old "click to look around" blocker, so the player always
+  // lands on real UI they can act on. Menu / cinematic / puzzle / end states
+  // are unaffected, and pauseGame() is a no-op if we're already paused.
+  if (missionUiOpen || dropoffActive || paused || inMenu) return;
+  if (game.levelComplete || endScreenVisible()) return;
+  pauseGame();
 });
 function setMissionUiOpen(open, relock) {
   missionUiOpen = open;
@@ -135,10 +156,21 @@ function updateAlarmBeacon(elapsed) {
 // Keys
 const keys = {};
 let isProne = false; // toggled by 'c', separate from the held-down movement keys
+let playerBusy = false; // locked while a scripted action (takedown / pickup) plays
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   keys[k] = true;
+  // During the opening cinematic any key skips straight to gameplay.
+  if (dropoffActive) { if (!e.repeat) skipDropoff(); return; }
   if (missionUiOpen) return; // puzzle UI owns the keyboard
+  if (k === 'escape' && !e.repeat) { handleEscape(); return; }
+  // P is the dedicated pause key (Esc also works, via the pointer-lock unlock
+  // handler). Toggling here means P both pauses and resumes.
+  if (k === 'p' && !e.repeat && !settingsOpen) {
+    if (paused) resumeGame(); else pauseGame();
+    return;
+  }
+  if (paused || settingsOpen) return;   // pause / settings overlay owns the keyboard
   if (k === 'e' && !e.repeat) tryInteract();
   if (k === 'v' && !e.repeat) toggleCameraMode();
   if (k === 'c' && !e.repeat) isProne = !isProne;
@@ -160,8 +192,6 @@ endScreenEl.addEventListener('click', restartFromEndScreen);
 // down this file, since top-level await blocks everything after it until
 // the models finish loading.
 const mainMenuEl = document.getElementById('mainMenu');
-const startBtn = document.getElementById('startBtn');
-let inMenu = true;
 let introPlaying = false;
 
 const ESCAPE_TIME_LIMIT = 25;
@@ -411,6 +441,8 @@ function resetCommonState() {
   isProne = false;
   isWallHugging = false;
   lastNoCardWarn = 0;
+  playerBusy = false;      // a retry mid-action must not stay rooted
+  clearTimers();           // drop any pending choreography beats from the last attempt
   stopAlarmKlaxon();
   stopHeartbeat();
   beaconLight.position.copy(BEACON_BASE);
@@ -563,8 +595,15 @@ const [, playerGltf] = await Promise.all([
   loadPlayerModel(),
 ]);
 
+// Retarget the loose Mixamo FBX clips onto each rig. The guard's Die clip must
+// be attached to the shared template BEFORE any guard is constructed (they
+// snapshot the template's clip list); the player's Punch/Pickup go on after.
+await attachGuardClip('./assets/models/anim_die.fbx', 'Die');
+
 const player = new Player(scene, playerGltf);
 player.group.position.copy(PLAYER_SPAWN);
+await attachPlayerClip(player, './assets/models/anim_punch.fbx', 'Punch');
+await attachPlayerClip(player, './assets/models/anim_pickup.fbx', 'Pickup');
 
 // Anything the guard constructors add to the scene is captured here so the
 // guards can be hidden while levels 2/3 are loaded (they only exist in level 1).
@@ -589,63 +628,379 @@ const guardB = new GuardB(scene, waypoints, colliders, game, { partnerCheckIndex
 const guardObjects = scene.children.filter((c) => !_sceneBeforeGuards.has(c));
 function setGuardsVisible(v) { guardObjects.forEach((o) => { o.visible = v; }); }
 
-// Menu is ready once the player actually exists — enable Start now.
-startBtn.disabled = false;
-startBtn.style.opacity = '1';
-startBtn.textContent = 'Start Mission';
-startBtn.addEventListener('click', () => {
-  mainMenuEl.style.display = 'none';
-  inMenu = false;
-  controls.lock(); // this click is the required user gesture for both pointer lock and audio
-  startMusic(currentLevel);
-  resumeAudioContext();
-  playIntroSequence();
-});
+// Menu is ready once the player actually exists — enable New Game now.
+// (refreshMenuItems() is invoked by the menu controller further down, once its
+// element refs exist; calling it here would hit their temporal dead zone.)
+modelsReady = true;
 
-// MENU CAMERA — slow orbit around the player while the menu is up. Reuses
-// the same scene/player/renderer, no separate mini-scene needed.
-const MENU_ORBIT_RADIUS = 2.5;
-const MENU_ORBIT_SPEED = 0.3;
+// First-load menu backdrop pose. The menu camera sits BEHIND the player, and at
+// PLAYER_SPAWN that put it outside the lobby's north wall (a black backdrop), so
+// for the pre-session menu we stand the player on open lobby floor facing +z —
+// a guard patrol waypoint, therefore guaranteed clear. A live session keeps the
+// player's real position (quit-to-menu / continue), and starting a mission
+// resets to PLAYER_SPAWN anyway.
+if (!sessionStarted) {
+  player.group.position.set(2.5, 0, 3.5);
+  player.group.rotation.y = 0;
+  setGuardsVisible(false);   // clean backdrop: no frozen bind-pose guards behind the menu
+}
+
+// MENU CAMERA — a slow, gently-swaying shot from BEHIND the idle player, so the
+// main menu's backdrop is the character standing in-frame (back view) exactly
+// like the reference art. Reuses the same scene/player/renderer, no mini-scene.
+const MENU_CAM_DIST = 3.1;
+const MENU_CAM_HEIGHT = 1.55;
 const _menuLookTarget = new THREE.Vector3();
+const _menuBehind = new THREE.Vector3();
 
 function updateMenuCamera(elapsed) {
-  const angle = elapsed * MENU_ORBIT_SPEED;
+  const ry = player.group.rotation.y;
+  // player's forward on the ground plane; behind = the opposite direction
+  const fwdX = Math.sin(ry), fwdZ = Math.cos(ry);
+  const sway = Math.sin(elapsed * 0.18) * 0.16;          // barely-there drift = alive, not static
+  const bx = -fwdX, bz = -fwdZ;
+  const cos = Math.cos(sway), sin = Math.sin(sway);
+  _menuBehind.set(bx * cos - bz * sin, 0, bx * sin + bz * cos);
   camera.position.set(
-    player.group.position.x + Math.sin(angle) * MENU_ORBIT_RADIUS,
-    player.group.position.y + 1.5,
-    player.group.position.z + Math.cos(angle) * MENU_ORBIT_RADIUS
+    player.group.position.x + _menuBehind.x * MENU_CAM_DIST,
+    player.group.position.y + MENU_CAM_HEIGHT,
+    player.group.position.z + _menuBehind.z * MENU_CAM_DIST
   );
-  _menuLookTarget.copy(player.group.position);
-  _menuLookTarget.y += 1.0;
+  // Aim to the player's screen-LEFT so the body sits right-of-centre, leaving
+  // room for the title / options column on the left like the reference.
+  // (screen-right for a camera behind the player is (-fwdZ, 0, fwdX).)
+  _menuLookTarget.set(
+    player.group.position.x + fwdZ * 1.2,
+    player.group.position.y + 1.15,
+    player.group.position.z - fwdX * 1.2
+  );
   camera.lookAt(_menuLookTarget);
 }
 
-// INTRO — a short scripted flythrough from the entrance down into the
-// Lobby, handing off to the player right as the "you're in" earpiece line
-// plays. Tune the start/end points by eye once you see it in-game.
-const INTRO_DURATION = 4;
-let introStartTime = 0;
-const introCamStart = new THREE.Vector3(10 * ROOM_SCALE, 8, -10 * ROOM_SCALE);
-const introCamEnd = new THREE.Vector3(-2 * ROOM_SCALE, 3, -1 * ROOM_SCALE);
-const introLookStart = new THREE.Vector3(0, 0, 0);
-const introLookEnd = new THREE.Vector3(PLAYER_SPAWN.x, 1, PLAYER_SPAWN.z + 0.3);
-const _introLook = new THREE.Vector3();
+// ---- OPENING DROP-OFF CINEMATIC -------------------------------------------
+// Replaces the old static intro flythrough: a black sedan pulls up outside the
+// building, the player steps out and walks to the entrance, then we fade to
+// black and hand control back at the interior spawn. Skippable with any key or
+// a click (keydown handler + canvas listener below). The exterior stage, the
+// car and the camera choreography all live in scene/dropoff.js.
+const fadeEl = document.getElementById('fade');
+const skipHintEl = document.getElementById('skipHint');
+let dropoff = null;
+let savedCameraMode = null;
 
-function playIntroSequence() {
-  introPlaying = true;
-  introStartTime = clock.elapsedTime;
+function setFade(opacity, ms = 500) {
+  if (!fadeEl) return;
+  fadeEl.style.transition = `opacity ${ms}ms ease`;
+  fadeEl.style.opacity = String(opacity);
 }
 
-function updateIntro(elapsed) {
-  const t = Math.min((elapsed - introStartTime) / INTRO_DURATION, 1);
-  const eased = t * t * (3 - 2 * t); // smoothstep
-  camera.position.lerpVectors(introCamStart, introCamEnd, eased);
-  _introLook.lerpVectors(introLookStart, introLookEnd, eased);
-  camera.lookAt(_introLook);
-  if (t >= 1) {
-    introPlaying = false;
-    showLine('levelStart', 6000);
+// Force the action visible in third person, remembering the player's choice so
+// it can be restored afterwards. Null-guarded so nested calls don't clobber.
+function forceThirdPerson() {
+  if (savedCameraMode === null) savedCameraMode = cameraMode;
+  cameraMode = CAMERA_MODE.THIRD;
+  player.model.visible = true;
+}
+function restoreCameraMode() {
+  if (savedCameraMode !== null) cameraMode = savedCameraMode;
+  savedCameraMode = null;
+  player.model.visible = cameraMode === CAMERA_MODE.THIRD;
+}
+
+function beginDropoff() {
+  dropoffActive = true;
+  setFade(0, 0);                       // start clear
+  forceThirdPerson();
+  root.visible = false;                // hide the interior for the exterior shot
+  setGuardsVisible(false);
+  blocker.style.display = 'none';      // the Start click already locked the pointer; keep the overlay away
+  dropoff = createDropoff({
+    scene, camera, player,
+    spawn: PLAYER_SPAWN,
+    onSubtitle: (txt, ms) => showSubtitle(txt, ms),
+    onFadeOut: () => setFade(1, 550),
+    onHandoff: () => finishDropoff(),
+  });
+  dropoff.start();
+  if (skipHintEl) skipHintEl.style.display = 'block';
+}
+
+function finishDropoff() {
+  if (skipHintEl) skipHintEl.style.display = 'none';
+  if (dropoff) { dropoff.dispose(); dropoff = null; }
+  dropoffActive = false;
+  root.visible = true;
+  setGuardsVisible(true);
+  player.group.position.copy(PLAYER_SPAWN);
+  player.group.rotation.y = 0;
+  camera.rotation.set(0, Math.PI, 0);
+  restoreCameraMode();
+  if (!controls.isLocked) controls.lock();   // normally still locked from the Start click
+  setFade(0, 750);                     // fade back in over the interior
+  showLine('levelStart', 6000);
+}
+
+function skipDropoff() {
+  if (dropoff) dropoff.skip();         // fires onFadeOut + onHandoff -> finishDropoff
+  else finishDropoff();
+}
+// A click also skips (but not the same click that pressed Start — that lands on
+// the menu button, not the canvas).
+renderer.domElement.addEventListener('click', () => { if (dropoffActive) skipDropoff(); });
+
+// ---- MAIN MENU / PAUSE / SETTINGS CONTROLLER ------------------------------
+// Zelda-style vertical option lists. The main menu's backdrop is the live 3D
+// scene (idle player from behind); the pause overlay's backdrop is the frozen
+// gameplay frame (we simply stop updating the world and keep rendering it).
+const menuContinueEl = document.getElementById('menuContinue');
+const menuNewGameEl = document.getElementById('menuNewGame');
+const menuSettingsEl = document.getElementById('menuSettings');
+const pauseOverlayEl = document.getElementById('pauseOverlay');
+const pauseResumeEl = document.getElementById('pauseResume');
+const pauseSettingsEl = document.getElementById('pauseSettings');
+const pauseQuitEl = document.getElementById('pauseQuit');
+const settingsPanelEl = document.getElementById('settingsPanel');
+const settingsBackEl = document.getElementById('settingsBack');
+const pauseBtnEl = document.getElementById('pauseBtn');
+const controlsPanelEl = document.getElementById('controlsPanel');
+const minimapEl = document.getElementById('minimap');
+const volSliders = {
+  master: document.getElementById('volMaster'),
+  music: document.getElementById('volMusic'),
+  sfx: document.getElementById('volSfx'),
+};
+const volVals = {
+  master: document.getElementById('volMasterVal'),
+  music: document.getElementById('volMusicVal'),
+  sfx: document.getElementById('volSfxVal'),
+};
+
+const MENU_ITEMS = () => [menuContinueEl, menuNewGameEl, menuSettingsEl].filter((b) => !b.hidden && !b.disabled);
+const PAUSE_ITEMS = () => [pauseResumeEl, pauseSettingsEl, pauseQuitEl];
+let menuIndex = 0, pauseIndex = 0;
+
+function paintSelection(items, index) {
+  items.forEach((b, i) => b.classList.toggle('selected', i === index));
+}
+function refreshMenuItems() {
+  menuContinueEl.hidden = !sessionStarted;
+  menuNewGameEl.disabled = !modelsReady;
+  menuNewGameEl.style.opacity = modelsReady ? '' : '0.4';
+  const items = MENU_ITEMS();
+  menuIndex = Math.max(0, Math.min(menuIndex, items.length - 1));
+  paintSelection(items, menuIndex);
+}
+function showMainMenu() {
+  mainMenuEl.style.display = 'flex';
+  pauseOverlayEl.style.display = 'none';
+  settingsPanelEl.style.display = 'none';
+  settingsOpen = false;
+  setGuardsVisible(false);   // menu backdrop = the player alone, like the reference
+  refreshMenuItems();
+}
+function hideMenus() {
+  mainMenuEl.style.display = 'none';
+  pauseOverlayEl.style.display = 'none';
+  settingsPanelEl.style.display = 'none';
+  settingsOpen = false;
+}
+
+function newGame() {
+  resumeAudioContext();
+  if (sessionStarted) { location.reload(); return; }   // a run already exists: start clean
+  sessionStarted = true;
+  hideMenus();
+  inMenu = false;
+  controls.lock();            // this click is the gesture for pointer lock + audio
+  startMusic(currentLevel);
+  beginDropoff();
+}
+function continueGame() {
+  if (!sessionStarted) return;
+  hideMenus();
+  inMenu = false;
+  paused = false;
+  setGuardsVisible(true);    // bring the world back when resuming a session
+  controls.lock();            // click gesture => re-lock is allowed
+  resumeAudioContext();
+}
+function pauseGame() {
+  if (paused || inMenu || dropoffActive || missionUiOpen || endScreenVisible() || game.levelComplete) return;
+  paused = true;
+  for (const k in keys) keys[k] = false;   // don't resume mid-stride
+  controls.unlock();
+  pauseOverlayEl.style.display = 'flex';
+  pauseIndex = 0;
+  paintSelection(PAUSE_ITEMS(), pauseIndex);
+}
+function resumeGame() {
+  if (!paused) return;
+  paused = false;
+  pauseOverlayEl.style.display = 'none';
+  settingsPanelEl.style.display = 'none';
+  settingsOpen = false;
+  controls.lock();            // called from the Resume click => valid gesture
+  setTimeout(() => {
+    if (controls.isLocked || paused || inMenu || missionUiOpen || dropoffActive) return;
+    // Lock was refused (e.g. a resume path that grants no pointer-lock
+    // activation). Drop back into the pause menu rather than the bare
+    // "click to look around" blocker, so the player can click Resume — a real
+    // gesture — to re-lock.
+    paused = true;
+    pauseOverlayEl.style.display = 'flex';
+  }, 300);
+}
+function quitToMenu() {
+  paused = false;
+  pauseOverlayEl.style.display = 'none';
+  settingsPanelEl.style.display = 'none';
+  settingsOpen = false;
+  inMenu = true;
+  sessionStarted = true;
+  controls.unlock();
+  showMainMenu();             // Continue now offered; world stays frozen behind
+}
+
+function syncSliders() {
+  for (const ch of ['master', 'music', 'sfx']) {
+    const v = Math.round(getChannelVolume(ch) * 100);
+    volSliders[ch].value = String(v);
+    volVals[ch].textContent = v + '%';
   }
+}
+function openSettings() {
+  settingsOpen = true;
+  syncSliders();
+  settingsPanelEl.style.display = 'flex';
+}
+function closeSettings() {
+  settingsOpen = false;
+  settingsPanelEl.style.display = 'none';
+}
+
+function handleEscape() {
+  if (settingsOpen) { closeSettings(); return; }
+  // Already paused (or in a state where pause doesn't apply): Esc does nothing
+  // here — resuming needs a real gesture for pointer lock, so use P or click
+  // Resume. The pointer-lock unlock handler is what opened the pause menu.
+  if (paused || inMenu || dropoffActive || missionUiOpen) return;
+  pauseGame();
+}
+
+// Menu / pause keyboard navigation (arrows or W/S to move, Enter/Space to pick).
+window.addEventListener('keydown', (e) => {
+  if (settingsOpen || e.repeat) return;
+  const k = e.key.toLowerCase();
+  const nav = (items, getIndex, setIndex) => {
+    if (k === 'arrowdown' || k === 's') { setIndex((getIndex() + 1) % items.length); paintSelection(items, getIndex()); }
+    else if (k === 'arrowup' || k === 'w') { setIndex((getIndex() - 1 + items.length) % items.length); paintSelection(items, getIndex()); }
+    else if (k === 'enter' || k === ' ') { items[getIndex()].click(); }
+  };
+  if (inMenu) { const it = MENU_ITEMS(); nav(it, () => menuIndex, (i) => { menuIndex = i; }); }
+  else if (paused) { const it = PAUSE_ITEMS(); nav(it, () => pauseIndex, (i) => { pauseIndex = i; }); }
+});
+
+// Mouse: hover selects, click activates.
+function bindList(items, getIndex, setIndex) {
+  items().forEach((b, i) => {
+    b.addEventListener('mouseenter', () => { setIndex(i); paintSelection(items(), getIndex()); });
+  });
+}
+bindList(MENU_ITEMS, () => menuIndex, (i) => { menuIndex = i; });
+bindList(PAUSE_ITEMS, () => pauseIndex, (i) => { pauseIndex = i; });
+menuContinueEl.addEventListener('click', continueGame);
+menuNewGameEl.addEventListener('click', newGame);
+menuSettingsEl.addEventListener('click', openSettings);
+pauseResumeEl.addEventListener('click', resumeGame);
+pauseSettingsEl.addEventListener('click', openSettings);
+pauseQuitEl.addEventListener('click', quitToMenu);
+settingsBackEl.addEventListener('click', closeSettings);
+pauseBtnEl.addEventListener('click', pauseGame);
+
+// Settings sliders + SFX preview ("hear it before you commit").
+for (const ch of ['master', 'music', 'sfx']) {
+  volSliders[ch].addEventListener('input', () => {
+    const v = Number(volSliders[ch].value) / 100;
+    setChannelVolume(ch, v);
+    volVals[ch].textContent = Math.round(v * 100) + '%';
+  });
+}
+document.getElementById('prevFootstep').addEventListener('click', () => {
+  resumeAudioContext();
+  playFootstep({ gain: 0.07, pan: -1 });
+  setTimeout(() => playFootstep({ gain: 0.07, pan: 1 }), 320);
+  setTimeout(() => playFootstep({ gain: 0.07, pan: -1 }), 640);
+});
+document.getElementById('prevKey').addEventListener('click', () => { resumeAudioContext(); playKeyPickup(); });
+document.getElementById('prevDoor').addEventListener('click', () => { resumeAudioContext(); playDoorUnlock(); });
+
+refreshMenuItems();
+
+// ---- Scripted-action choreography (takedown / pickup) ---------------------
+// A tiny elapsed-time scheduler so impact sounds and follow-up beats line up
+// with the animation without blocking the render loop.
+const _timers = [];
+function after(delay, fn) { _timers.push({ at: clock.elapsedTime + delay, fn }); }
+function updateTimers() {
+  const now = clock.elapsedTime;
+  for (let i = _timers.length - 1; i >= 0; i--) {
+    if (now >= _timers[i].at) { const fn = _timers[i].fn; _timers.splice(i, 1); fn(); }
+  }
+}
+function clearTimers() { _timers.length = 0; }
+
+function faceTarget(target) {
+  const dx = target.x - player.group.position.x;
+  const dz = target.z - player.group.position.z;
+  if (dx * dx + dz * dz > 1e-4) player.group.rotation.y = Math.atan2(dx, dz);
+}
+
+// Two punches, then the guard drops (Die animation). Movement stays locked and
+// the camera swings to third person so the whole beat is visible.
+function startTakedown() {
+  if (playerBusy || guardA.down) return;
+  playerBusy = true;
+  forceThirdPerson();
+  faceTarget(guardA.group.position);
+  guardA.facePoint(player.group.position);
+  const punchDur = player.clipDuration('Punch') || 0.7;
+  const impactAt = punchDur * 0.42;
+  let punches = 0;
+  const swing = () => {
+    after(impactAt, () => playTakedownThud());
+    player.playOneShot('Punch', () => {
+      punches += 1;
+      if (punches < 2) { swing(); return; }
+      guardA.takeDown();               // retargeted Die clip, clamped on the fallen frame
+      showLine('takedown', 4500);
+      keyMesh.visible = true;          // key drops beside the body
+      after(0.55, () => { restoreCameraMode(); playerBusy = false; });
+    });
+  };
+  swing();
+}
+
+// Kneel-and-take (Pickup animation) for the guard's key or the desk access card.
+function startPickup(kind) {
+  if (playerBusy) return;
+  playerBusy = true;
+  forceThirdPerson();
+  faceTarget(kind === 'key' ? keyMesh.position : keycardMesh.position);
+  const dur = player.clipDuration('Pickup') || 1.0;
+  player.playOneShot('Pickup', () => { restoreCameraMode(); playerBusy = false; });
+  after(dur * 0.5, () => {
+    if (kind === 'key') {
+      guardA.takeKey();
+      playKeyPickup();
+      keyMesh.visible = false;
+      showSubtitle('Key acquired \u2014 use it to unlock the manager\'s office.', 3000);
+    } else {
+      game.hasKeycard = true;
+      keycardMesh.visible = false;
+      playKeycardPickup();
+      showLine('keycardPickup');
+    }
+  });
 }
 
 // CAMERA MODES
@@ -782,23 +1137,17 @@ function tryInteract() {
     else tryObjective();
     return;
   }
-  const guardAWasDown = guardA.down;
-  const hadKey = game.hasKey;
-  if (guardA.tryInteract(player.group.position)) {
-    if (!guardAWasDown && guardA.down) {
-      playTakedownThud();
-      showLine('takedown', 4500);
-      keyMesh.visible = true; // key shows beside the body
-    }
-    if (!hadKey && game.hasKey) {
-      playKeyPickup();
-      keyMesh.visible = false;
-      showSubtitle('Key acquired \u2014 use it to unlock the manager\'s office.', 3000);
-    }
-    return;
+  if (playerBusy) return; // mid takedown / pickup — ignore new interactions
+  const pos = player.group.position;
+  // Guard A: two-punch takedown, then kneel to take the key.
+  if (guardA.horizDistanceTo(pos) <= guardA.interactDistance) {
+    if (!guardA.down) { startTakedown(); return; }
+    if (!guardA.hasKey) { startPickup('key'); return; }
   }
-  if (tryUnlockOfficeDoor()) return;
-  tryPickupKeycard();
+  if (nearOfficeDoor()) { tryUnlockOfficeDoor(); return; }
+  if (!game.hasKeycard && distanceXZ(pos, keycardMesh.position) <= KEYCARD_INTERACT_DISTANCE) {
+    startPickup('card'); // kneel-and-take animation for the access card too
+  }
 }
 const GUARD_A_LINGER_RANGE = 4 * ROOM_SCALE;
 const GUARD_A_LINGER_TIME = 1.2; // seconds of continuous proximity before the line fires
@@ -906,6 +1255,10 @@ function resetLevel1() {
   hasWarnedGuardAPartner = false;
   hasEnteredOffices = false;
 
+  playerBusy = false;      // clear any mid-takedown/pickup lock from the failed attempt
+  clearTimers();
+  restoreCameraMode();     // in case a retry lands while an action had forced third person
+
   stopAlarmKlaxon();
   stopHeartbeat();
   beaconLight.intensity = 0;
@@ -936,7 +1289,23 @@ const SPRINT_SPEED = 5;
 const CROUCH_SPEED = 1.5;
 const PRONE_SPEED = 0.8;
 
+// Footstep cadence. We accumulate a gait phase while the player actually moves
+// and fire one alternating footstep per full cycle, so the steps land exactly on
+// the walk/run animation's pace. Gains are deliberately low — the building is
+// meant to be quiet — and crouch/crawl are softer and slower than a sprint.
+let gaitPhase = 0;
+let gaitFoot = 1;
+const GAIT = {
+  Walking: { rate: 1.9, gain: 0.055, bright: 700 },
+  Sprint:  { rate: 2.7, gain: 0.085, bright: 950 },
+  LowWalk: { rate: 1.4, gain: 0.035, bright: 520 },
+  Crawl:   { rate: 1.1, gain: 0.028, bright: 420 },
+};
+
 function updateMovement(dt) {
+  // While a scripted action (takedown / pickup) plays, the mixer owns the
+  // animation and the player is rooted — don't touch position or clips here.
+  if (playerBusy) return;
   if (keys['q']) {
     updateWallHug(dt);
     return;
@@ -983,11 +1352,22 @@ function updateMovement(dt) {
       player.group.rotation.y = Math.atan2(_moveDir.x, _moveDir.z);
       const clip = isProne ? 'Crawl' : isCrouching ? 'LowWalk' : isSprinting ? 'Sprint' : 'Walking';
       player.playAction(clip);
+      const g = GAIT[clip];
+      if (g) {
+        gaitPhase += dt * g.rate;
+        if (gaitPhase >= 1) {
+          gaitPhase -= 1;
+          gaitFoot = -gaitFoot;
+          playFootstep({ gain: g.gain, pan: gaitFoot, bright: g.bright });
+        }
+      }
     } else {
       player.playAction('Idle');
+      gaitPhase = 0;
     }
   } else {
     player.playAction('Idle');
+    gaitPhase = 0;
   }
 }
 
@@ -1069,10 +1449,15 @@ function animate() {
 
     if (inMenu) {
     updateMenuCamera(elapsed);
+    player.playAction('Idle');   // menu backdrop = the character standing, back view
     player.update(dt);
-  } else if (introPlaying) {
-    updateIntro(elapsed);
+  } else if (dropoffActive) {
+    if (dropoff) dropoff.update(dt);   // cinematic owns camera + car + player
     player.update(dt);
+  } else if (paused) {
+    // Pause overlay up: freeze the world exactly where it was. We skip every
+    // update (movement, guards, mixer, timers) but still render, so the frame
+    // behind the overlay is precisely the moment the player paused.
   } else if (missionUiOpen) {
     // puzzle overlay open: world is paused, player just idles
     player.playAction('Idle');
@@ -1102,11 +1487,13 @@ function animate() {
     }
   }
 
-    const promptText = (inMenu || introPlaying || game.levelComplete || endScreenVisible()) ? null : getInteractPrompt();
+  if (!inMenu && !paused) updateTimers();   // fire scheduled beats (impact sounds, item grants)
+
+    const promptText = (inMenu || paused || dropoffActive || game.levelComplete || endScreenVisible()) ? null : getInteractPrompt();
   promptEl.textContent = promptText || '';
   promptEl.style.display = promptText ? 'block' : 'none';
 
-  if (!inMenu) { updateElevatorDoors(dt); updateOfficeDoor(dt); }
+  if (!inMenu && !paused) { updateElevatorDoors(dt); updateOfficeDoor(dt); }
 
   if (game.alarmActive && !game.levelComplete) {
     // A sharper curve than plain sine, exponent < 1 snaps through the
@@ -1117,7 +1504,16 @@ function animate() {
   }
   updateAlarmBeacon(elapsed);
   // soundtrack reacts to the game: calm -> tense as alarms / guard detection rise
-  if (!inMenu) setMusicIntensity(game.alarmActive ? 1 : ((levelHandle && levelHandle.threat) || 0));
+  if (!inMenu && !paused) setMusicIntensity(game.alarmActive ? 1 : ((levelHandle && levelHandle.threat) || 0));
+
+  // Pause button only during live gameplay (hidden in menus / cinematic / puzzles / end).
+  const gameplayLive = !inMenu && !paused && !dropoffActive && !missionUiOpen && !game.levelComplete && !endScreenVisible();
+  pauseBtnEl.style.display = gameplayLive ? 'block' : 'none';
+  // The HUD (controls list + minimap) belongs to live gameplay only — keep the
+  // menu / pause / cinematic frames clean like the reference art.
+  const hudLive = gameplayLive && !settingsOpen;
+  controlsPanelEl.style.display = hudLive ? 'block' : 'none';
+  minimapEl.style.display = hudLive ? 'block' : 'none';
 
   renderer.render(scene, camera);
   updateMinimap();
