@@ -133,6 +133,37 @@
         border: 1px solid rgba(232,226,208,0.5); border-radius: 2px; padding: 7px 30px; cursor: pointer;
       }
       .settings-back:hover { background: rgba(232,226,208,0.12); }
+
+      /* Credits v3: rolling credits */
+      #creditsPanel { background: radial-gradient(ellipse at 50% 45%, #0b0f16 0%, #04060a 72%); z-index: 26; overflow: hidden; }
+      .credits-window {
+        position: relative; width: min(680px, 92vw); height: 100%; overflow: hidden;
+        -webkit-mask-image: linear-gradient(transparent 0, #000 14%, #000 84%, transparent 100%);
+        mask-image: linear-gradient(transparent 0, #000 14%, #000 84%, transparent 100%);
+      }
+      .credits-roll {
+        position: absolute; left: 0; right: 0; top: 0; text-align: center; color: #d8d2c0;
+        padding-bottom: 40px; will-change: transform;
+        transform: translateY(var(--roll-from, 100vh));
+      }
+      .credits-roll.playing { animation: creditsRoll var(--roll-dur, 70s) linear 1 forwards; }
+      .credits-roll.paused { animation-play-state: paused; }   /* SPACE toggles this */
+      @keyframes creditsRoll {
+        from { transform: translateY(var(--roll-from, 100vh)); }
+        to   { transform: translateY(var(--roll-to, -100%)); }
+      }
+      .credits-roll .c-title { font-size: 46px; letter-spacing: 8px; font-variant: small-caps; color: #efe9d8; margin: 0; }
+      .credits-roll .c-sub { font-size: 14px; letter-spacing: 5px; color: #9a937f; margin: 6px 0 4px; }
+      .credits-roll .c-head {
+        margin: 54px 0 12px; font-size: 15px; letter-spacing: 6px; font-variant: small-caps; color: #b9b2a0;
+      }
+      .credits-roll .c-line { font-size: 19px; line-height: 1.7; color: #e6e0cd; margin: 0; }
+      .credits-roll .c-small { font-size: 14px; line-height: 1.6; color: #a9a290; margin: 2px auto 0; max-width: 520px; }
+      .credits-roll b { color: #efe9d8; font-weight: 600; }
+      .credits-roll .todo { color: #e8b26a; }   /* amber = the team still has to fill this in */
+      .credits-roll .c-end { margin-top: 70px; font-size: 22px; letter-spacing: 5px; font-variant: small-caps; color: #efe9d8; }
+      .credits-back { position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%); margin: 0; z-index: 2; background: rgba(4,6,9,0.7); }
+      .credits-hint { position: absolute; bottom: 4px; left: 0; right: 0; text-align: center; font-size: 11px; letter-spacing: 2px; color: #6f6a5c; z-index: 2; }
     </style>
   </head>
   <body>
@@ -149,6 +180,7 @@
         <button class="menu-item" id="menuContinue" hidden>Continue</button>
         <button class="menu-item selected" id="menuNewGame">New Game</button>
         <button class="menu-item" id="menuSettings">Settings</button>
+        <button class="menu-item" id="menuCredits">Credits</button>
       </div>
       <div class="version">Ver 1.0<br>&copy; CGV Studios</div>
     </div>
@@ -197,6 +229,60 @@
         </div>
         <button class="settings-back" id="settingsBack">Back</button>
       </div>
+    </div>
+
+    <!-- ============ CREDITS v3: rolling credits (opened from the main menu; Esc or Back closes it) ============ -->
+    <div id="creditsPanel" class="overlay" style="display:none;">
+      <div class="credits-window">
+        <div class="credits-roll" id="creditsRoll">
+          <h1 class="c-title">Heist Infiltration</h1>
+          <p class="c-sub">TEAM BUG OFF</p>
+          <p class="c-small">COMS3006A / COMS3025A &mdash; Computer Graphics and Visualisation<br>University of the Witwatersrand</p>
+
+          <div class="c-head">Created by</div>
+          <p class="c-line">Kgethego Mphelane</p>
+          <p class="c-line">Kgotlelelo Mokwana</p>
+          <p class="c-line">Lindokuhle Simelane</p>
+          <p class="c-line">Mmaphefo Thobejane</p>
+          <p class="c-line">Tasmiya Choonara</p>
+
+          <div class="c-head">Made by us</div>
+          <p class="c-line">Game design, all three levels and the gameplay code</p>
+          <p class="c-line">The scene graph and animation rigging</p>
+          <p class="c-line">Custom GLSL shaders: vision cones, laser beams, the vault artifact</p>
+          <p class="c-line">All textures, generated procedurally in code</p>
+          <p class="c-line">Music, footsteps and sound effects, synthesised in code</p>
+
+          <div class="c-head">Characters and animation</div>
+          <p class="c-line"><b>Mixamo</b> &mdash; mixamo.com</p>
+          <p class="c-small">All characters and animation clips (idle, walk, run, crawl, punch, die, pick-up),
+          &copy; Adobe, used under the Mixamo Terms of Use.</p>
+
+          <div class="c-head">Key art</div>
+          <p class="c-line">Main-menu artwork generated with <b>Qoder AI</b></p>
+
+          <div class="c-head">Voice</div>
+          <p class="c-line">Earpiece handler voice lines generated with <b>ElevenLabs</b></p>
+          <p class="c-small">elevenlabs.io, AI text-to-speech</p>
+
+          <div class="c-head">Built with</div>
+          <p class="c-line"><b>three.js</b> &mdash; MIT licence</p>
+          <p class="c-small">threejs.org, with its add-ons PointerLockControls, GLTFLoader, FBXLoader and SkeletonUtils</p>
+          <p class="c-line">meshoptimizer decoder &mdash; MIT licence</p>
+          <p class="c-small">github.com/zeux/meshoptimizer, bundled with three.js</p>
+          <p class="c-line">Vite &mdash; MIT licence</p>
+          <p class="c-small">vitejs.dev, build tool</p>
+          <p class="c-line">glTF-Transform &mdash; MIT licence</p>
+          <p class="c-small">gltf-transform.dev, used to compress the character models</p>
+
+          <div class="c-head">Learning resources</div>
+          <p class="c-small">The three.js documentation and examples, and the three.js tutorials linked on the course page.</p>
+
+          <div class="c-end">Thank you for playing</div>
+        </div>
+      </div>
+      <button class="settings-back credits-back" id="creditsBack">Back</button>
+      <div class="credits-hint">ESC &mdash; CLOSE &nbsp;&middot;&nbsp; SPACE &mdash; PAUSE</div>
     </div>
 
     <div id="controlsPanel" style="position:absolute; top:20px; right:20px; background:rgba(0,0,0,0.55); color:#eee; font-family:sans-serif; font-size:13px; padding:12px 16px; border-radius:8px; line-height:1.6; z-index:5;">
