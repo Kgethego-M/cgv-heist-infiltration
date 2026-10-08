@@ -530,6 +530,7 @@ function createMissionUI(onUiChange, localSecHud = true) {
           el('p', '', 'Click a wire on the left, then the socket of the same colour on the right.'));
         wrap = el('div', 'l2-wires');
         svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        status = el('div', 'status', 'Match each cable to its matching socket colour.');
         const lc = el('div', 'l2-col'); const rc = el('div', 'l2-col');
         leftNodes = WIRE_COLORS.map((c, i) => {
           const b = el('button', 'l2-node'); b.style.background = cssColor(c);
@@ -552,7 +553,6 @@ function createMissionUI(onUiChange, localSecHud = true) {
           rc.appendChild(b); return b;
         });
         wrap.append(svg, lc, rc);
-        status = el('div', 'status');
         closeBtn = el('button', 'close', 'Close  [Esc]');
         closeBtn.onclick = () => close(true);
         p.append(wrap, status, closeBtn);

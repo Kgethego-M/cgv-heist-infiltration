@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { normalizeRig, loadRetargetedClip, dedupeSkeletons } from '../animation/rig.js';
 
 const loader = new GLTFLoader();
 loader.setMeshoptDecoder(MeshoptDecoder);
@@ -13,6 +14,12 @@ let guardTemplate = null; // { scene, animations } — loaded ONCE, shared by al
 export async function loadGuardModel(url = './assets/models/guard_character.glb') {
   if (guardTemplate) return guardTemplate;
   const gltf = await loader.loadAsync(url);
+  // This GLB ships several duplicate armatures; keep only the one the visible
+  // meshes are skinned to, or animation tracks bind to an invisible skeleton.
+  dedupeSkeletons(gltf.scene);
+  // Strip the `mixamorigN:` bone namespace so loose Mixamo FBX clips (die)
+  // retarget onto the guard rig by base bone name. See animation/rig.js.
+  normalizeRig(gltf.scene, gltf.animations);
   guardTemplate = { scene: gltf.scene, animations: gltf.animations };
 
   // Print the exact clip names your file actually exported — Blender/Mixamo
@@ -22,6 +29,17 @@ export async function loadGuardModel(url = './assets/models/guard_character.glb'
 
   return guardTemplate;
 }
+
+// Imports one motion-only Mixamo FBX and adds it to the SHARED guard template
+// so every guard cloned afterwards gets it in its action map. MUST be awaited
+// before constructing GuardA/GuardB (makeGuardBody snapshots the clip list).
+export async function attachGuardClip(url, name) {
+  if (!guardTemplate) throw new Error('attachGuardClip called before loadGuardModel()');
+  const clip = await loadRetargetedClip(url, guardTemplate.scene, name);
+  if (clip) guardTemplate.animations.push(clip);
+  return clip;
+}
+
 // Returns the loaded guard template so other systems can clone the guard model. Returns null if not loaded yet.
 export function getGuardTemplate() {
   return guardTemplate;
@@ -49,6 +67,7 @@ function makeGuardBody() {
   guardTemplate.animations.forEach((clip) => {
     actions[clip.name] = mixer.clipAction(clip);
   });
+  body.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; } });
   return { body, mixer, actions };
 }
 
@@ -101,6 +120,14 @@ export class GuardA {
     return this._tmp.length();
   }
 
+  // Turn to face a world position (used so the guard meets the player's punch
+  // head-on before the death animation plays, instead of staring at the desk).
+  facePoint(pos) {
+    const dx = pos.x - this.group.position.x;
+    const dz = pos.z - this.group.position.z;
+    if (dx * dx + dz * dz > 1e-4) this.group.rotation.y = Math.atan2(dx, dz);
+  }
+
   update(dt) {
     this.mixer?.update(dt);
     if (this.down) return;
@@ -132,20 +159,29 @@ export class GuardA {
     this.game.guardADown = true;
     // Stop idle sway and rotation
     this.group.rotation.y = this.baseRotation;
-    // Rotate the body mesh itself to lie flat on the ground. Guard A stands
-    // right at the front edge of the reception desk facing AWAY from it
-    // (baseRotation points him toward the lobby centre), so tipping the body
-    // by +90° here lays him down face-first in the direction he's already
-    // facing — out into the open floor. The old -90° tipped him backward,
-    // straight into the desk behind him.
+
+    const die = this.actions && this.actions['Die'];
+    if (die && this.mixer) {
+      // Play the retargeted Mixamo death clip once and clamp on the final
+      // (fallen) frame so the body stays down. The mixer keeps ticking in
+      // update() while `down`, which is what holds the clamped pose.
+      if (this.currentAction && this.currentAction !== die) this.currentAction.fadeOut(0.12);
+      die.reset();
+      die.setLoop(THREE.LoopOnce, 1);
+      die.clampWhenFinished = true;
+      die.fadeIn(0.05).play();
+      this.currentAction = die;
+      return;
+    }
+
+    // Fallback (FBX failed to load): tip the body flat, as before. Guard A
+    // faces away from the reception desk, so +90° lays him out into the open
+    // floor rather than back into the desk.
     if (this.body) {
       this.body.rotation.x = Math.PI / 2;
       this.body.position.y = 0.3; // lower so it sits on floor
     }
-    // Also stop any playing animation
-    if (this.mixer) {
-      this.mixer.stopAllAction();
-    }
+    if (this.mixer) this.mixer.stopAllAction();
   }
 
    takeKey() {
