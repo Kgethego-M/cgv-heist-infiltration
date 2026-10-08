@@ -761,6 +761,9 @@ const pauseSettingsEl = document.getElementById('pauseSettings');
 const pauseQuitEl = document.getElementById('pauseQuit');
 const settingsPanelEl = document.getElementById('settingsPanel');
 const settingsBackEl = document.getElementById('settingsBack');
+const menuCreditsEl = document.getElementById('menuCredits');
+const creditsPanelEl = document.getElementById('creditsPanel');
+const creditsBackEl = document.getElementById('creditsBack');
 const pauseBtnEl = document.getElementById('pauseBtn');
 const controlsPanelEl = document.getElementById('controlsPanel');
 const minimapEl = document.getElementById('minimap');
@@ -775,7 +778,7 @@ const volVals = {
   sfx: document.getElementById('volSfxVal'),
 };
 
-const MENU_ITEMS = () => [menuContinueEl, menuNewGameEl, menuSettingsEl].filter((b) => !b.hidden && !b.disabled);
+const MENU_ITEMS = () => [menuContinueEl, menuNewGameEl, menuSettingsEl, menuCreditsEl].filter((b) => !b.hidden && !b.disabled);
 const PAUSE_ITEMS = () => [pauseResumeEl, pauseSettingsEl, pauseQuitEl];
 let menuIndex = 0, pauseIndex = 0;
 
@@ -793,7 +796,7 @@ function refreshMenuItems() {
 function showMainMenu() {
   mainMenuEl.style.display = 'flex';
   pauseOverlayEl.style.display = 'none';
-  settingsPanelEl.style.display = 'none';
+  settingsPanelEl.style.display = 'none'; creditsPanelEl.style.display = 'none';
   settingsOpen = false;
   setGuardsVisible(false);   // menu backdrop = the player alone, like the reference
   refreshMenuItems();
@@ -801,7 +804,7 @@ function showMainMenu() {
 function hideMenus() {
   mainMenuEl.style.display = 'none';
   pauseOverlayEl.style.display = 'none';
-  settingsPanelEl.style.display = 'none';
+  settingsPanelEl.style.display = 'none'; creditsPanelEl.style.display = 'none';
   settingsOpen = false;
 }
 
@@ -837,7 +840,7 @@ function resumeGame() {
   if (!paused) return;
   paused = false;
   pauseOverlayEl.style.display = 'none';
-  settingsPanelEl.style.display = 'none';
+  settingsPanelEl.style.display = 'none'; creditsPanelEl.style.display = 'none';
   settingsOpen = false;
   controls.lock();            // called from the Resume click => valid gesture
   setTimeout(() => {
@@ -853,7 +856,7 @@ function resumeGame() {
 function quitToMenu() {
   paused = false;
   pauseOverlayEl.style.display = 'none';
-  settingsPanelEl.style.display = 'none';
+  settingsPanelEl.style.display = 'none'; creditsPanelEl.style.display = 'none';
   settingsOpen = false;
   inMenu = true;
   sessionStarted = true;
@@ -875,8 +878,35 @@ function openSettings() {
 }
 function closeSettings() {
   settingsOpen = false;
-  settingsPanelEl.style.display = 'none';
+  settingsPanelEl.style.display = 'none'; creditsPanelEl.style.display = 'none';
 }
+
+// Credits reuse the settings 'modal' flag, so the pause/menu keys and the HUD are already locked out while it is open.
+// startCreditsRoll(): measure the text, set how far and how long it scrolls, and restart the animation from the top.
+function startCreditsRoll() {
+  const roll = document.getElementById('creditsRoll');
+  roll.classList.remove('playing', 'paused');
+  const vh = window.innerHeight;
+  const h = roll.scrollHeight;
+  roll.style.setProperty('--roll-from', vh + 'px');
+  const to = Math.round(vh * 0.5 - h);                                         // stop with "Thank you for playing" held mid-screen
+  roll.style.setProperty('--roll-to', to + 'px');
+  roll.style.setProperty('--roll-dur', Math.max(20, (vh - to) / 55) + 's');   // about 55 px per second
+  void roll.offsetWidth;                                                       // force a restart
+  roll.classList.add('playing');
+}
+function toggleCreditsPause() {
+  document.getElementById('creditsRoll').classList.toggle('paused');
+}
+function openCredits() {
+  settingsOpen = true;
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();   // so SPACE can't re-press the Credits button
+  creditsPanelEl.style.display = 'flex';
+  startCreditsRoll();
+}
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && creditsPanelEl.style.display === 'flex') { e.preventDefault(); toggleCreditsPause(); }
+});
 
 function handleEscape() {
   if (settingsOpen) { closeSettings(); return; }
@@ -911,6 +941,8 @@ bindList(PAUSE_ITEMS, () => pauseIndex, (i) => { pauseIndex = i; });
 menuContinueEl.addEventListener('click', continueGame);
 menuNewGameEl.addEventListener('click', newGame);
 menuSettingsEl.addEventListener('click', openSettings);
+menuCreditsEl.addEventListener('click', openCredits);
+creditsBackEl.addEventListener('click', closeSettings);
 pauseResumeEl.addEventListener('click', resumeGame);
 pauseSettingsEl.addEventListener('click', openSettings);
 pauseQuitEl.addEventListener('click', quitToMenu);
