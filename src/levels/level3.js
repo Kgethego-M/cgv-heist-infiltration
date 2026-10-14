@@ -52,7 +52,10 @@ const noteMat = new THREE.MeshStandardMaterial({ color: 0xfff08a, emissive: 0xff
 
 // ---- tuning --------------------------------------------------------------
 // Player height per stance: a beam at height y hits you if y < this.
-const STANCE_HEIGHT = { stand: 1.8, sprint: 1.8, crouch: 1.15, prone: 0.4 };
+// Exported because Level 2's server-maze lasers use the SAME rule (its chest-
+// height beams clear a crawling player) — one table, so the two levels can
+// never disagree about what a stance is worth.
+export const STANCE_HEIGHT = { stand: 1.8, sprint: 1.8, crouch: 1.15, prone: 0.4 };
 // How far guards can see you per stance, as a fraction of their full range.
 const STANCE_VISIBILITY = { stand: 1.0, sprint: 1.35, crouch: 0.65, prone: 0.4 };
 // How fast the detection meter fills per stance: sprinting is loud, crawling is quiet.

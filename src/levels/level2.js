@@ -4,6 +4,9 @@ import { createVisionConeMaterial } from '../fx/shaders.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 // The same shared guard model Level 1 uses. Adjust this path if guards.js lives elsewhere.
 import { getGuardTemplate, loadGuardModel } from '../ai/guards.js';
+// Shared stance-height table (Level 3 owns it) — the laser trip check in
+// securityUpdate uses it, so both levels agree on what crawling is worth.
+import { STANCE_HEIGHT } from './level3.js';
 
 // ============================================================
 // LEVEL 2 — Server Room & Labs
@@ -1045,11 +1048,15 @@ export function createLevel2(scene, hooks = {}) {
   // Laser gates — span the centre aisle between the inner rack rows.
   // Each gate gets its own cloned material (markerMat.laser is shared with other
   // levels) so a tripped beam can flash without lighting every laser in the game.
+  // The beams sit at chest height: a CRAWLING player passes under them, the same
+  // rule Level 3's lasers use. securityUpdate reads `y` from here, so the mesh
+  // and the hit test can never drift apart.
+  const LASER_BEAM_Y = 1.0;
   const laserGates = [8.75, 15.25].map((z) => {
     const mat = track(markerMat.laser.clone());
-    const mesh = makeLaserGate(0, 1.0, z, 6.2, 0, mat);
+    const mesh = makeLaserGate(0, LASER_BEAM_Y, z, 6.2, 0, mat);
     maze.add(mesh);
-    return { mesh, mat, z, halfW: 3.1, cooldown: 0, flash: 0 };
+    return { mesh, mat, z, y: LASER_BEAM_Y, halfW: 3.1, cooldown: 0, flash: 0 };
   });
   level2.add(maze);
 
@@ -1157,7 +1164,11 @@ export function createLevel2(scene, hooks = {}) {
     noteRead: false, safeOpen: false, hasBadge: false,
     wiresSolved: false, hacked: false, hackProgress: 0,
     securityLevel: 0, alarmRaised: false, caught: false,
+    laserHint: false,   // one-time "crawl under the beams" tip near the first gate
   };
+  // Player stance ('stand'/'sprint'/'crouch'/'prone'), recorded every frame by
+  // the handle's update() so the laser check knows the player's height.
+  let stanceNow = 'stand';
   const HACK_TIME = 3.5;       // seconds of holding E
   const SAFE_SWING = { t: 0 }; // 0..1
   const DOOR_ANIM = { t: 0 };
@@ -1365,12 +1376,21 @@ export function createLevel2(scene, hooks = {}) {
     });
     ui.setDetect(frac > 0 ? frac : null);
 
-    // --- lasers: touching a beam trips the alarm ---
+    // --- lasers: a beam trips the alarm only if it passes BELOW your stance height ---
+    // Same rule as Level 3's lasers: the chest-height beam clears a crawling
+    // player (prone 0.4 < 1.0) but cuts through a crouched (1.15) or standing
+    // (1.8) body. Before this check, crawling under the beam still tripped the
+    // alarm even though the player visibly slid underneath it.
+    const height = STANCE_HEIGHT[stanceNow] ?? 1.8;
     laserGates.forEach((g) => {
       g.cooldown = Math.max(0, g.cooldown - dt);
       g.flash = Math.max(0, g.flash - dt);
       g.mat.emissiveIntensity = 1.5 + 5 * (g.flash / 0.6);
-      if (g.cooldown <= 0 && Math.abs(pos.z - g.z) < 0.3 && Math.abs(pos.x) < g.halfW + 0.2) {
+      if (!state.laserHint && Math.abs(pos.z - g.z) < 3.5 && Math.abs(pos.x) < g.halfW + 1) {
+        state.laserHint = true;
+        H.onSubtitle('Laser gate — crawl (C) under the beam to slip past quietly.', 5000);
+      }
+      if (g.cooldown <= 0 && g.y < height && Math.abs(pos.z - g.z) < 0.3 && Math.abs(pos.x) < g.halfW + 0.2) {
         g.cooldown = SEC.LASER_COOLDOWN;
         g.flash = 0.6;
         escalate('laser_tripped');
@@ -1464,6 +1484,10 @@ export function createLevel2(scene, hooks = {}) {
     state,        // read-only view for other systems (e.g. future Security Level code)
     safeCode,
     getSecurityLevel: () => state.securityLevel,
+    // main.js calls this every frame with the player's stance. Level 2 only needs
+    // it for the laser height check (crawl under the beams), so just record it —
+    // the real per-frame work stays in missions.update, like Level 3's split.
+    update(dt, t, pos, stance = 'stand') { stanceNow = stance; },
     dispose,
   };
 }

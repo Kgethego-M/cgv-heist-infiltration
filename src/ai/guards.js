@@ -87,12 +87,16 @@ function playAction(entity, name, fadeTime = 0.25) {
 // GUARD A — stationary at the reception desk. Takedown target; carries the
 // key to the Manager's Office.
 export class GuardA {
-  constructor(scene, game, position) {
+  constructor(scene, game, position, options = {}) {
     this.game = game;
     this.down = false;
     this.hasKey = false;
     this.idleTime = 0;
     this.interactDistance = 1.8;
+    // Yaw snapped to at the instant the Die clip starts. That clip carries the
+    // body ~0.88 m forward along the rig's local +Z, so this facing alone
+    // decides where the corpse lands. Null = keep baseRotation (see takeDown).
+    this.fallYaw = options.fallYaw ?? null;
 
     this.group = new THREE.Group();
     this.group.name = 'GuardA';
@@ -157,8 +161,12 @@ export class GuardA {
   takeDown() {
     this.down = true;
     this.game.guardADown = true;
-    // Stop idle sway and rotation
-    this.group.rotation.y = this.baseRotation;
+    // Stop the idle sway. NOTE: this also overrides the facePoint() that
+    // startTakedown() applied for the punches — deliberate, because the Die
+    // clip throws the body forward along wherever he is facing, and facing the
+    // player (who approaches from the open lobby) would drive him back into
+    // the reception desk. fallYaw is chosen against the level geometry.
+    this.group.rotation.y = this.fallYaw ?? this.baseRotation;
 
     const die = this.actions && this.actions['Die'];
     if (die && this.mixer) {

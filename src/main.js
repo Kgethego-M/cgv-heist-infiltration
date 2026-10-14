@@ -157,6 +157,10 @@ function updateAlarmBeacon(elapsed) {
 const keys = {};
 let isProne = false; // toggled by 'c', separate from the held-down movement keys
 let playerBusy = false; // locked while a scripted action (takedown / pickup) plays
+// Companion state for the lock. Declared here (above the key handler) so a
+// keypress can never touch them before initialisation.
+let busyLabel = null;       // replaces the [E] prompt while the lock is held
+let pendingInteract = false; // an E pressed during the lock, fired when it lifts
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   keys[k] = true;
@@ -171,7 +175,13 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (paused || settingsOpen) return;   // pause / settings overlay owns the keyboard
-  if (k === 'e' && !e.repeat) tryInteract();
+  if (k === 'e' && !e.repeat) {
+    // Buffer instead of dropping: a scripted action owns the player for a beat,
+    // and swallowing every press in that window is what made players mash E and
+    // conclude the game had hung. One queued press fires when the lock lifts.
+    if (playerBusy) pendingInteract = true;
+    else tryInteract();
+  }
   if (k === 'v' && !e.repeat) toggleCameraMode();
   if (k === 'c' && !e.repeat) isProne = !isProne;
   if (k === 'r' && !e.repeat && endScreenVisible()) restartFromEndScreen();
@@ -198,6 +208,15 @@ const ESCAPE_TIME_LIMIT = 25;
 const ELEVATOR_REACH_DISTANCE = 1.8;
 const KEYCARD_INTERACT_DISTANCE = 1.6;
 const OFFICE_DOOR_INTERACT_DISTANCE = 2.0;
+
+// The Mixamo "Pickup" clip is 9.57 s: kneel (~4 s), grab, stand back up
+// (~7.9 s), then a long idle tail. Playing it at 1x held playerBusy for the
+// whole clip, so every key/card grab rooted the player for nearly ten seconds
+// with the item already in hand at the halfway point — that is the "it feels
+// frozen" beat. Speed the clip up and drop the lock just after the grab; the
+// stand-up crossfades into locomotion instead of blocking it.
+const PICKUP_TIME_SCALE = 2.2;
+const PICKUP_LOCK_TAIL = 0.5;   // seconds of lock kept after the grab, to blend out
 
 const game = {
   guardADown: false,
@@ -442,6 +461,9 @@ function resetCommonState() {
   isWallHugging = false;
   lastNoCardWarn = 0;
   playerBusy = false;      // a retry mid-action must not stay rooted
+  busyLabel = null;
+  pendingInteract = false;
+  player.endOneShot(0);    // discard a mid-action onDone so it can't fire endBusy later
   clearTimers();           // drop any pending choreography beats from the last attempt
   stopAlarmKlaxon();
   stopHeartbeat();
@@ -608,7 +630,16 @@ await attachPlayerClip(player, './assets/models/anim_pickup.fbx', 'Pickup');
 // Anything the guard constructors add to the scene is captured here so the
 // guards can be hidden while levels 2/3 are loaded (they only exist in level 1).
 const _sceneBeforeGuards = new Set(scene.children);
-const guardA = new GuardA(scene, game, new THREE.Vector3(-2.5 * ROOM_SCALE, 0, 3 * ROOM_SCALE));
+// Guard A mans the reception counter. He stands ~1.1 m out from it rather than
+// pressed against it (the old 3 * ROOM_SCALE put him 0.28 m from the desk's
+// front face). That matters because the Die clip lays a 1.8 m body down: swept
+// over every facing angle from the old spot, the corpse clipped the desk
+// collider at ALL of them — there was no rotation-only fix. From here, facing
+// due west (-X) drops him along the open lobby floor parallel to the counter,
+// measured clear of the desk by 0.71 m.
+const GUARD_A_POS = new THREE.Vector3(-2.5 * ROOM_SCALE, 0, 2.47 * ROOM_SCALE);
+const GUARD_A_FALL_YAW = -Math.PI / 2;
+const guardA = new GuardA(scene, game, GUARD_A_POS, { fallYaw: GUARD_A_FALL_YAW });
 
 // Original loop scaled by ROOM_SCALE, except waypoint 2: the old spot (4, 3)
 // is now inside the waiting area (armchair / coffee table), so it's pulled
@@ -987,40 +1018,82 @@ function faceTarget(target) {
   if (dx * dx + dz * dz > 1e-4) player.group.rotation.y = Math.atan2(dx, dz);
 }
 
+// ---- Lock bookkeeping -----------------------------------------------------
+// playerBusy both roots the player and swallows E. Neither is visible on its
+// own, so a three-second animation is indistinguishable from a hung game:
+// beginBusy swaps in a label for the prompt, and endBusy replays a press that
+// arrived while the lock was held.
+function beginBusy(label) {
+  playerBusy = true;
+  busyLabel = label;
+  pendingInteract = false;
+  forceThirdPerson();
+}
+
+// Idempotent — the clip's own 'finished' event and the early-cut timer both
+// land here, and only the first one through does any work.
+function endBusy() {
+  if (!playerBusy) return;
+  playerBusy = false;
+  busyLabel = null;
+  restoreCameraMode();
+  player.endOneShot(0.3);   // blend locomotion back over the animation's tail
+  const queued = pendingInteract;
+  pendingInteract = false;
+  if (queued) tryInteract();
+}
+
 // Two punches, then the guard drops (Die animation). Movement stays locked and
 // the camera swings to third person so the whole beat is visible.
 function startTakedown() {
   if (playerBusy || guardA.down) return;
-  playerBusy = true;
-  forceThirdPerson();
+  beginBusy('Taking down guard\u2026');
   faceTarget(guardA.group.position);
   guardA.facePoint(player.group.position);
   const punchDur = player.clipDuration('Punch') || 0.7;
   const impactAt = punchDur * 0.42;
   let punches = 0;
+  // Advance the chain on the wall clock rather than the mixer's 'finished'
+  // event. The main loop clamps dt to 0.05 s, so below 20 fps the mixer runs
+  // slower than real time and every mixer-driven beat stretches out — measured
+  // at roughly double length in a software-rendered browser. Timers keep the
+  // beat the same length on any machine, matching how startPickup is timed.
   const swing = () => {
     after(impactAt, () => playTakedownThud());
-    player.playOneShot('Punch', () => {
+    player.playOneShot('Punch', null, 0.12);
+    after(punchDur, () => {
       punches += 1;
       if (punches < 2) { swing(); return; }
       guardA.takeDown();               // retargeted Die clip, clamped on the fallen frame
       showLine('takedown', 4500);
-      keyMesh.visible = true;          // key drops beside the body
-      after(0.55, () => { restoreCameraMode(); playerBusy = false; });
+      dropKeyBesideGuard();
+      after(0.55, endBusy);
     });
   };
   swing();
 }
 
+// The key has to land beside wherever the body actually comes to rest. It used
+// to be a fixed point baked into level1.js, which the fall no longer matches
+// now that the corpse is laid out clear of the desk.
+function dropKeyBesideGuard() {
+  const g = guardA.group.position;
+  keyMesh.position.set(g.x + 1.05, 0.15, g.z - 0.3);
+  keyMesh.visible = true;
+}
+
 // Kneel-and-take (Pickup animation) for the guard's key or the desk access card.
 function startPickup(kind) {
   if (playerBusy) return;
-  playerBusy = true;
-  forceThirdPerson();
+  beginBusy(kind === 'key' ? 'Taking key\u2026' : 'Taking access card\u2026');
   faceTarget(kind === 'key' ? keyMesh.position : keycardMesh.position);
-  const dur = player.clipDuration('Pickup') || 1.0;
-  player.playOneShot('Pickup', () => { restoreCameraMode(); playerBusy = false; });
-  after(dur * 0.5, () => {
+
+  // Wall-clock length of the sped-up clip, and the beat where the hand closes.
+  const dur = (player.clipDuration('Pickup') || 1.0) / PICKUP_TIME_SCALE;
+  const grabAt = dur * 0.5;
+
+  player.playOneShot('Pickup', endBusy, 0.12, PICKUP_TIME_SCALE);
+  after(grabAt, () => {
     if (kind === 'key') {
       guardA.takeKey();
       playKeyPickup();
@@ -1033,6 +1106,10 @@ function startPickup(kind) {
       showLine('keycardPickup');
     }
   });
+  // Cut the clip here instead of letting it run out. Everything after the grab
+  // is the stand-up plus a long idle tail, and holding the lock through it is
+  // exactly what read as a freeze.
+  after(grabAt + PICKUP_LOCK_TAIL, endBusy);
 }
 
 // CAMERA MODES
@@ -1214,6 +1291,9 @@ function getInteractPrompt() {
     if (levelHandle && levelHandle.missions) return levelHandle.missions.getPrompt(player.group.position);
     return nearObjective() ? LEVEL_CONFIG[currentLevel].objectivePrompt : null;
   }
+  // A scripted action owns the player: say what it is doing rather than showing
+  // an actionable [E] prompt the player will mash against to no effect.
+  if (playerBusy) return busyLabel;
   const guardPrompt = guardA.getPrompt(player.group.position);
   if (guardPrompt) return guardPrompt;
   if (nearOfficeDoor()) {
@@ -1288,6 +1368,9 @@ function resetLevel1() {
   hasEnteredOffices = false;
 
   playerBusy = false;      // clear any mid-takedown/pickup lock from the failed attempt
+  busyLabel = null;
+  pendingInteract = false;
+  player.endOneShot(0);    // discard a mid-action onDone so it can't fire endBusy later
   clearTimers();
   restoreCameraMode();     // in case a retry lands while an action had forced third person
 

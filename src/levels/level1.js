@@ -1523,8 +1523,14 @@ export function createLevel1(scene) {
     color: 0xd4a017, emissive: 0xd4a017, emissiveIntensity: 0.5, metalness: 0.8, roughness: 0.2,
   });
   const keyMesh = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.04, 0.08), keyMat);
-  keyMesh.position.set(-2.2 * S, 0.15, 3.3 * S);
+  // Resting spot only — main.js re-places the key beside the body when Guard A
+  // actually goes down (dropKeyBesideGuard), so this just has to be sane.
+  keyMesh.position.set(-1.8 * S, 0.15, 2.27 * S);
   keyMesh.name = 'keyMesh';
+  // It is a pickup, not an obstacle. Marking it non-solid also matters because
+  // main.js caches collider Box3s per mesh: a collider that gets repositioned
+  // at runtime would keep colliding against its stale, original box.
+  keyMesh.userData.noCollide = true;
   keyMesh.visible = false;
   lobby.add(keyMesh);
 

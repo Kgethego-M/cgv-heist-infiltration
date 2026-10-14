@@ -120,7 +120,11 @@ export class Player {
 
   // Play `name` exactly once and call onDone when it ends (or immediately if
   // the clip is missing, so choreography never dead-locks on a bad name).
-  playOneShot(name, onDone, fadeTime = 0.12) {
+  // `timeScale` plays the clip faster than authored — the Mixamo one-shots are
+  // far slower than the beats they stand for (the 9.57 s "Pickup" clip is a
+  // ~2 s kneel-and-grab plus a long idle tail), and playing them straight
+  // roots the player long enough to read as a freeze.
+  playOneShot(name, onDone, fadeTime = 0.12, timeScale = 1) {
     const next = this.actions[name];
     if (!next) { if (onDone) onDone(); return; }
     if (this.currentAction && this.currentAction !== next) this.currentAction.fadeOut(fadeTime);
@@ -128,9 +132,23 @@ export class Player {
     next.reset();
     next.setLoop(THREE.LoopOnce, 1);
     next.clampWhenFinished = true;
+    next.timeScale = timeScale;   // reset() does not touch this, so set it every time
     next.fadeIn(fadeTime).play();
     next.paused = false;
     this.currentAction = next;
+  }
+
+  // Cut the running one-shot short and hand the mixer back to locomotion,
+  // discarding its onDone. Used once the point of the action has landed (the
+  // item is in hand) and the remainder of the clip is just the character
+  // standing back up — playAction() then crossfades into walking over
+  // `fadeTime`. Safe to call when nothing is playing.
+  endOneShot(fadeTime = 0.25) {
+    const os = this._oneShot;
+    if (!os) return;
+    this._oneShot = null;
+    if (os.action) os.action.fadeOut(fadeTime);
+    this.currentAction = null;
   }
 
   // Duration in seconds of a registered clip (0 if unknown) — used to time
