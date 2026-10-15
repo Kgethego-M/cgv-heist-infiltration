@@ -1752,6 +1752,19 @@ if (new URLSearchParams(location.search).has('debug')) {
       console.log('[debug] jumped to level', e.key);
     }
   });
+  // One-click QA landing: ?debug&level=N drops the playtest straight into that
+  // level as soon as the menu is dismissed (skipping the drop-off cinematic),
+  // so a session can start mid-game without the skip-key choreography.
+  const qaLevel = Number(new URLSearchParams(location.search).get('level'));
+  if (qaLevel >= 1 && qaLevel <= 3) {
+    const iv = setInterval(() => {
+      if (inMenu) return;
+      clearInterval(iv);
+      if (dropoffActive) skipDropoff();
+      loadLevel(qaLevel);
+      console.log('[debug] auto-jumped to level', qaLevel);
+    }, 200);
+  }
   // QA shortcut to the closing extraction cinematic without a full playthrough:
   // jump to level 3 (press 3) then call window.__qaExtract() from the console.
   window.__qaExtract = () => beginExtraction();
