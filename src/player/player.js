@@ -21,8 +21,8 @@ export async function loadPlayerModel(url = './assets/models/player_character.gl
 // Imports one motion-only Mixamo FBX and registers it on the player's mixer
 // under `name`, rescaled from the FBX's centimetre rig to the player's metre
 // rig. Returns the clip so callers can read its duration for choreography.
-export async function attachPlayerClip(player, url, name) {
-  const clip = await loadRetargetedClip(url, player.model, name);
+export async function attachPlayerClip(player, url, name, opts = {}) {
+  const clip = await loadRetargetedClip(url, player.model, name, opts);
   if (clip) player.addClip(name, clip);
   return clip;
 }

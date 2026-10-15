@@ -152,7 +152,7 @@ const _q = new THREE.Quaternion();
 //   quaternion -> premultiply by `rotFix` so the torso leans/turns correctly.
 // `rotFix` is derived from the two Hips rest rotations, so it stays correct
 // even if an export ever flips the convention.
-function retargetHips(clip, srcRig, dstRig) {
+function retargetHips(clip, srcRig, dstRig, inPlace = false) {
   const src = srcRig && srcRig.getObjectByName ? srcRig.getObjectByName('Hips') : null;
   const dst = dstRig && dstRig.getObjectByName ? dstRig.getObjectByName('Hips') : null;
   if (!src || !dst) {
@@ -172,6 +172,14 @@ function retargetHips(clip, srcRig, dstRig) {
     ? (dstLen / srcLen) * RETARGET_SCALE_OVERRIDE
     : RETARGET_SCALE_OVERRIDE;
 
+  // For an in-place cycle (e.g. a ladder climb the cinematic moves itself) the
+  // clip's own root translation must be discarded, or the Hips travel — up AND
+  // sideways in the retargeted frame — drags the body off whatever anchor the
+  // caller drives. Pin every Hips position keyframe to the target rig's rest
+  // Hips so the cycle animates around a fixed pelvis; keep the quaternion track
+  // so the torso still leans/turns with the motion.
+  const rest = dst.position;
+
   clip.tracks.forEach((track) => {
     const dot = track.name.indexOf('.');
     if (dot < 0) return;
@@ -179,9 +187,15 @@ function retargetHips(clip, srcRig, dstRig) {
     const prop = track.name.slice(dot + 1);
     const v = track.values;
     if (prop === 'position') {
-      for (let i = 0; i < v.length; i += 3) {
-        _v.set(v[i], v[i + 1], v[i + 2]).applyQuaternion(rotFix).multiplyScalar(scale);
-        v[i] = _v.x; v[i + 1] = _v.y; v[i + 2] = _v.z;
+      if (inPlace) {
+        for (let i = 0; i < v.length; i += 3) {
+          v[i] = rest.x; v[i + 1] = rest.y; v[i + 2] = rest.z;
+        }
+      } else {
+        for (let i = 0; i < v.length; i += 3) {
+          _v.set(v[i], v[i + 1], v[i + 2]).applyQuaternion(rotFix).multiplyScalar(scale);
+          v[i] = _v.x; v[i + 1] = _v.y; v[i + 2] = _v.z;
+        }
       }
     } else if (prop === 'quaternion') {
       for (let i = 0; i < v.length; i += 4) {
@@ -197,7 +211,7 @@ function retargetHips(clip, srcRig, dstRig) {
 // Load a Mixamo motion-only FBX and return its clip, retargeted to drive
 // `targetRig` (a normalized character model). `clipName` is what the caller
 // registers it under in that character's action map.
-export async function loadRetargetedClip(url, targetRig, clipName) {
+export async function loadRetargetedClip(url, targetRig, clipName, opts = {}) {
   const fbx = await fbxLoader.loadAsync(url);
   fbx.updateMatrixWorld(true);
 
@@ -211,7 +225,7 @@ export async function loadRetargetedClip(url, targetRig, clipName) {
   // and so every track addresses the target's bones by base name.
   normalizeRig(fbx, fbx.animations);
 
-  const scale = retargetHips(clip, fbx, targetRig);
+  const scale = retargetHips(clip, fbx, targetRig, !!opts.inPlace);
 
   clip.name = clipName;
   console.log(`[rig] ${clipName} retargeted: hipsScale=${scale.toFixed(4)} tracks=${clip.tracks.length} dur=${clip.duration.toFixed(2)}s`);

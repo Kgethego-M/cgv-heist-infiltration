@@ -353,6 +353,13 @@ export function createGuardForce({
       queue = 0; spawnGrace = 0; lastCell = -1; fieldAge = 99;
     },
 
+    // Drop any in-flight bullets only (guards stay put). Used by the extraction
+    // cinematic so rounds frozen mid-air don't hang over the roof.
+    clearBullets() {
+      bullets.forEach((b) => scene.remove(b.mesh));
+      bullets.length = 0;
+    },
+
     // playerH = how tall the player is right now (crouching/crawling dodges high shots)
     update(dt, player, speed, onCatch, playerH = 1.9) {
       if (queue > 0) {
