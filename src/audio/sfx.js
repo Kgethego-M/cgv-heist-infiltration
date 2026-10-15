@@ -209,3 +209,109 @@ export function stopHeartbeat() {
   clearTimeout(heartbeatTimeout);
   heartbeatTimeout = null;
 }
+
+// ---- Extraction helicopter rotor loop ---------------------------------------
+// A looping lowpassed-noise rumble (the wash of air) plus a blade-pass "thump"
+// made by modulating a low sine with a ~13 Hz LFO. Both spin up over ~2s when
+// started so the bird sounds like it's already working as it settles onto the
+// pad. Runs through the SFX bus so the Effects slider still governs it.
+let rotorNodes = null;
+export function startRotorLoop() {
+  if (rotorNodes) return; // already running
+  const ac = getCtx();
+  const t0 = ac.currentTime;
+
+  // rumble: 2 s of noise looped through a lowpass
+  const len = Math.floor(ac.sampleRate * 2);
+  const buf = ac.createBuffer(1, len, ac.sampleRate);
+  const d = buf.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < len; i++) {
+    const w = Math.random() * 2 - 1;
+    last = (last + 0.02 * w) / 1.02;      // brown-ish: smoother, lower
+    d[i] = last * 3.2;
+  }
+  const rumbleSrc = ac.createBufferSource();
+  rumbleSrc.buffer = buf; rumbleSrc.loop = true;
+  const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 220;
+  const rumbleGain = ac.createGain(); rumbleGain.gain.value = 0.0001;
+  rumbleSrc.connect(lp).connect(rumbleGain).connect(getSfxNode());
+
+  // blade thump: low sine pulsed by an LFO
+  const thumpOsc = ac.createOscillator(); thumpOsc.type = 'sine'; thumpOsc.frequency.value = 54;
+  const thumpGain = ac.createGain(); thumpGain.gain.value = 0.0;
+  const lfo = ac.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 4;
+  const lfoDepth = ac.createGain(); lfoDepth.gain.value = 0.18;
+  lfo.connect(lfoDepth).connect(thumpGain.gain);
+  thumpOsc.connect(thumpGain).connect(getSfxNode());
+
+  rumbleSrc.start(t0); thumpOsc.start(t0); lfo.start(t0);
+  // spin-up
+  rumbleGain.gain.linearRampToValueAtTime(0.5, t0 + 2.0);
+  lfo.frequency.linearRampToValueAtTime(13, t0 + 2.2);
+
+  rotorNodes = { rumbleSrc, thumpOsc, lfo, rumbleGain, thumpGain, lfoDepth };
+}
+export function stopRotorLoop(fade = 1.0) {
+  if (!rotorNodes) return;
+  const ac = getCtx();
+  const t0 = ac.currentTime;
+  const { rumbleSrc, thumpOsc, lfo, rumbleGain, thumpGain, lfoDepth } = rotorNodes;
+  rotorNodes = null;
+  const f = Math.max(0.05, fade);
+  rumbleGain.gain.cancelScheduledValues(t0);
+  rumbleGain.gain.setValueAtTime(rumbleGain.gain.value, t0);
+  rumbleGain.gain.linearRampToValueAtTime(0.0001, t0 + f);
+  lfoDepth.gain.cancelScheduledValues(t0);
+  lfoDepth.gain.setValueAtTime(lfoDepth.gain.value, t0);
+  lfoDepth.gain.linearRampToValueAtTime(0.0001, t0 + f);
+  [rumbleSrc, thumpOsc, lfo].forEach((n) => { try { n.stop(t0 + f + 0.05); } catch (e) {} });
+}
+
+// ---- Mission-complete celebration -------------------------------------------
+// Routed through the MUSIC bus (it's a score sting, not an effect): an
+// ascending major fanfare, a warm sustained brass-ish chord underneath, and a
+// shimmering cymbal swell. Played the instant the MISSION COMPLETE sign lands.
+function playBusTone(bus, { freq = 440, duration = 0.3, type = 'sine', gain = 0.2, freqEnd = null, delay = 0 }) {
+  const ac = getCtx();
+  const t0 = ac.currentTime + delay;
+  const osc = ac.createOscillator(); osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  if (freqEnd) osc.frequency.exponentialRampToValueAtTime(freqEnd, t0 + duration);
+  const g = ac.createGain();
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.linearRampToValueAtTime(gain, t0 + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+  osc.connect(g).connect(bus);
+  osc.start(t0); osc.stop(t0 + duration + 0.03);
+}
+function playCymbal(bus, { duration = 1.4, gain = 0.14, delay = 0 } = {}) {
+  const ac = getCtx();
+  const t0 = ac.currentTime + delay;
+  const len = Math.max(1, Math.floor(ac.sampleRate * duration));
+  const buf = ac.createBuffer(1, len, ac.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) {
+    const env = Math.pow(1 - i / len, 1.6);            // shimmer in, long decay
+    d[i] = (Math.random() * 2 - 1) * env;
+  }
+  const src = ac.createBufferSource(); src.buffer = buf;
+  const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 4200;
+  const g = ac.createGain(); g.gain.value = gain;
+  src.connect(hp).connect(g).connect(bus);
+  src.start(t0);
+}
+export function playMissionComplete() {
+  const bus = getMusicNode();
+  // ascending C-major fanfare (bells)
+  [523.25, 659.25, 783.99, 1046.5].forEach((f, i) =>
+    playBusTone(bus, { freq: f, duration: 0.9, type: 'triangle', gain: 0.16, delay: i * 0.13 })
+  );
+  // sustained brass-ish C-major chord swelling underneath
+  [261.63, 329.63, 392.0, 523.25].forEach((f) =>
+    playBusTone(bus, { freq: f, duration: 2.4, type: 'sawtooth', gain: 0.05, delay: 0.45 })
+  );
+  // top sparkle octave hit + cymbal
+  playBusTone(bus, { freq: 1567.98, duration: 1.2, type: 'sine', gain: 0.09, delay: 0.52 });
+  playCymbal(bus, { duration: 1.8, gain: 0.13, delay: 0.4 });
+}

@@ -8,6 +8,7 @@ import { Player, loadPlayerModel, attachPlayerClip } from './player/player.js';
 import { loadEarpieceAudio, playLine } from './audio/earpiece.js';
 import { fxTime } from './fx/shaders.js';
 import { createDropoff } from './scene/dropoff.js';
+import { createExtraction } from './scene/extraction.js';
 import { startMusic, setMusicLevel, setMusicIntensity } from './audio/music.js';
 import './audio/volume.js';   // - / + keys set the master volume
 import { setChannelVolume, getChannelVolume } from './audio/volume.js';
@@ -15,6 +16,7 @@ import {
   resumeAudioContext, playTakedownThud, playKeyPickup, playKeycardPickup,
   playDoorUnlock, playDoorDenied, playElevatorDing, playWinSting, playLoseSting,
   startAlarmKlaxon, stopAlarmKlaxon, startHeartbeat, stopHeartbeat, playFootstep,
+  startRotorLoop, stopRotorLoop, playMissionComplete,
 } from './audio/sfx.js';
 
 // 1. Scene
@@ -56,6 +58,12 @@ let missionUiOpen = false;
 // top-level await, and the cinematic deliberately runs with the pointer
 // unlocked so the mouse-look "click to look" blocker must stay hidden.
 let dropoffActive = false;
+// True while the rooftop extraction cinematic (end of Level 3) owns the camera.
+// Declared up here beside dropoffActive for the same reason: the unlock handler
+// and the key handler below can fire before later declarations run, and the
+// cinematic keeps the pointer LOCKED (skippable with any key), so the pause /
+// blocker paths must stand down while it plays.
+let extractionActive = false;
 // True while the pause overlay owns the screen (pointer unlocked on purpose).
 // Declared up here with the other UI-state flags so the unlock handler below
 // can suppress the "click to look around" blocker while paused / in a menu.
@@ -69,7 +77,7 @@ controls.addEventListener('unlock', () => {
   // instead of the old "click to look around" blocker, so the player always
   // lands on real UI they can act on. Menu / cinematic / puzzle / end states
   // are unaffected, and pauseGame() is a no-op if we're already paused.
-  if (missionUiOpen || dropoffActive || paused || inMenu) return;
+  if (missionUiOpen || dropoffActive || extractionActive || paused || inMenu) return;
   if (game.levelComplete || endScreenVisible()) return;
   pauseGame();
 });
@@ -166,6 +174,8 @@ window.addEventListener('keydown', (e) => {
   keys[k] = true;
   // During the opening cinematic any key skips straight to gameplay.
   if (dropoffActive) { if (!e.repeat) skipDropoff(); return; }
+  // Same for the closing extraction cinematic — any key skips to the end screen.
+  if (extractionActive) { if (!e.repeat) skipExtraction(); return; }
   if (missionUiOpen) return; // puzzle UI owns the keyboard
   if (k === 'escape' && !e.repeat) { handleEscape(); return; }
   // P is the dedicated pause key (Esc also works, via the pointer-lock unlock
@@ -269,13 +279,24 @@ const game = {
     onWin() {
     if (this.levelComplete) return;
     this.levelComplete = true;
-    controls.unlock();
-    if (currentLevel === 1) doorAnim.opening = true;
     stopAlarmKlaxon();
     stopHeartbeat();
-    playElevatorDing();
 
     const secondsTaken = Math.floor((performance.now() - attemptStart) / 1000);
+
+    // Final rooftop: play the extraction cinematic (helicopter + rope-ladder
+    // climb + fly-off) instead of popping the end screen immediately. It keeps
+    // the pointer locked and calls showEndScreen itself on hand-off.
+    if (currentLevel === TOTAL_LEVELS) {
+      extractionSeconds = secondsTaken;
+      beginExtraction();
+      return;
+    }
+
+    controls.unlock();
+    if (currentLevel === 1) doorAnim.opening = true;
+    playElevatorDing();
+
     const secondsLeft = Math.max(0, Math.ceil(this.escapeTimeRemaining ?? 0));
     if (currentLevel !== 1) {
       showEndScreen(true, `Cleared in ${secondsTaken}s.`);
@@ -626,6 +647,11 @@ const player = new Player(scene, playerGltf);
 player.group.position.copy(PLAYER_SPAWN);
 await attachPlayerClip(player, './assets/models/anim_punch.fbx', 'Punch');
 await attachPlayerClip(player, './assets/models/anim_pickup.fbx', 'Pickup');
+// Mixamo ladder-climb cycle for the rooftop extraction cinematic. Loaded
+// in-place (root translation stripped) so the cinematic can drive the actual
+// ascent up the ladder without the clip's own hip travel dragging the body off
+// the ropes. The cinematic falls back to its procedural hang pose if missing.
+await attachPlayerClip(player, './assets/models/anim_climbladder.fbx', 'Climb', { inPlace: true });
 
 // Anything the guard constructors add to the scene is captured here so the
 // guards can be hidden while levels 2/3 are loaded (they only exist in level 1).
@@ -778,6 +804,78 @@ function skipDropoff() {
 // A click also skips (but not the same click that pressed Start — that lands on
 // the menu button, not the canvas).
 renderer.domElement.addEventListener('click', () => { if (dropoffActive) skipDropoff(); });
+
+// ---- CLOSING EXTRACTION CINEMATIC (end of Level 3) -------------------------
+// The mirror of the drop-off: reaching the rooftop exit no longer pops the end
+// screen instantly. Instead a helicopter descends over the helipad, drops a rope
+// ladder, the operative sprints over and climbs it, and the bird carries them
+// off while the pursuing guards freeze and crane their heads up after it. The
+// MISSION COMPLETE sign fades in mid fly-off, then we fade to black and hand
+// back to showEndScreen(). Skippable with any key (keydown handler above) — the
+// pointer stays LOCKED throughout, so no re-lock gesture is ever needed.
+const missionCompleteEl = document.getElementById('missionComplete');
+let extraction = null;
+let extractionSeconds = 0;
+let qaFrozen = false;   // ?debug QA: hold the cinematic on a frame for screenshots
+
+function beginExtraction() {
+  if (extractionActive) return;
+  extractionActive = true;
+  setFade(0, 0);                       // start clear
+  forceThirdPerson();                  // the climb must be visible in third person
+  if (missionCompleteEl) missionCompleteEl.style.opacity = '0';
+  // A cutscene shouldn't show the gameplay HUD, and the objectives panel would
+  // otherwise float over the MISSION COMPLETE end screen. Level 3 rebuilds its
+  // HUD fresh on the next load, so hiding these here is safe.
+  ['l3-tracker', 'l3-map', 'l3-hp', 'l3-hold'].forEach((id) => {
+    const node = document.getElementById(id);
+    if (node) node.style.display = 'none';
+  });
+
+  const exitPos = levelHandle.exitPosition;         // rooftop stair mouth
+  const roofY = exitPos.y;
+  const padCenter = new THREE.Vector3(exitPos.x, roofY, exitPos.z + 3);  // the helipad, 3 m further out
+  const force = levelHandle.debug && levelHandle.debug.force;
+  if (force) {
+    force.setShooting(false);           // no one fires during the cutscene
+    if (force.clearBullets) force.clearBullets();   // drop any rounds frozen mid-air
+  }
+  const guards = force && force.guardList ? force.guardList.slice() : [];
+
+  startRotorLoop();                     // the bird is already working as it settles in
+  extraction = createExtraction({
+    scene, camera, player, guards,
+    anchors: { exitPos: exitPos.clone(), padCenter, roofY },
+    onSubtitle: (txt, ms) => showSubtitle(txt, ms),
+    onSign: () => {
+      if (missionCompleteEl) missionCompleteEl.style.opacity = '1';
+      playMissionComplete();
+    },
+    onFadeOut: () => setFade(1, 600),
+    onHandoff: () => finishExtraction(),
+  });
+  extraction.start();
+  if (skipHintEl) skipHintEl.style.display = 'block';
+}
+
+function finishExtraction() {
+  if (skipHintEl) skipHintEl.style.display = 'none';
+  if (extraction) { extraction.dispose(); extraction = null; }
+  extractionActive = false;
+  stopRotorLoop(0.8);
+  restoreCameraMode();
+  // The MISSION COMPLETE sign and the end screen both say the same thing; hide
+  // the in-scene sign and reveal the end screen from behind the black fade.
+  if (missionCompleteEl) missionCompleteEl.style.opacity = '0';
+  showEndScreen(true, `Cleared in ${extractionSeconds}s.`);
+  setFade(0, 500);                      // fade from black into the end screen
+  controls.unlock();                    // end screen is up — free the cursor
+}
+
+function skipExtraction() {
+  if (extraction) extraction.skip();    // fires onFadeOut + onHandoff -> finishExtraction
+  else finishExtraction();
+}
 
 // ---- MAIN MENU / PAUSE / SETTINGS CONTROLLER ------------------------------
 // Zelda-style vertical option lists. The main menu's backdrop is the live 3D
@@ -1569,6 +1667,14 @@ function animate() {
   } else if (dropoffActive) {
     if (dropoff) dropoff.update(dt);   // cinematic owns camera + car + player
     player.update(dt);
+  } else if (extractionActive) {
+    // Rooftop extraction: advance the mixer FIRST (player.update), then layer
+    // the climb/hang pose on top via extraction.update's aimBone writes, so the
+    // procedural pose lands after the animation clip and is never stomped.
+    if (!qaFrozen) {
+      player.update(dt);
+      if (extraction) extraction.update(dt);   // owns camera + heli + guards
+    }
   } else if (paused) {
     // Pause overlay up: freeze the world exactly where it was. We skip every
     // update (movement, guards, mixer, timers) but still render, so the frame
@@ -1619,10 +1725,11 @@ function animate() {
   }
   updateAlarmBeacon(elapsed);
   // soundtrack reacts to the game: calm -> tense as alarms / guard detection rise
-  if (!inMenu && !paused) setMusicIntensity(game.alarmActive ? 1 : ((levelHandle && levelHandle.threat) || 0));
+  if (extractionActive) setMusicIntensity(0);   // let the celebratory sting carry the ending
+  else if (!inMenu && !paused) setMusicIntensity(game.alarmActive ? 1 : ((levelHandle && levelHandle.threat) || 0));
 
   // Pause button only during live gameplay (hidden in menus / cinematic / puzzles / end).
-  const gameplayLive = !inMenu && !paused && !dropoffActive && !missionUiOpen && !game.levelComplete && !endScreenVisible();
+  const gameplayLive = !inMenu && !paused && !dropoffActive && !extractionActive && !missionUiOpen && !game.levelComplete && !endScreenVisible();
   pauseBtnEl.style.display = gameplayLive ? 'block' : 'none';
   // The HUD (controls list + minimap) belongs to live gameplay only — keep the
   // menu / pause / cinematic frames clean like the reference art.
@@ -1645,4 +1752,17 @@ if (new URLSearchParams(location.search).has('debug')) {
       console.log('[debug] jumped to level', e.key);
     }
   });
+  // QA shortcut to the closing extraction cinematic without a full playthrough:
+  // jump to level 3 (press 3) then call window.__qaExtract() from the console.
+  window.__qaExtract = () => beginExtraction();
+  window.__qaSkip = () => skipExtraction();
+  // Freeze/unfreeze the cinematic on the current frame (QA screenshots).
+  window.__qaFreeze = (on = true) => { qaFrozen = !!on; };
+  // Dump live transforms so camera framing can be diagnosed from the console.
+  window.__qaDbg = () => {
+    const r3 = (v) => [v.x, v.y, v.z].map((n) => +n.toFixed(2));
+    const heli = scene.getObjectByName('Helicopter');
+    const d = new THREE.Vector3(); camera.getWorldDirection(d);
+    return { cam: r3(camera.position), dir: r3(d), player: r3(player.group.position), heli: heli ? r3(heli.position) : null };
+  };
 }

@@ -35,6 +35,21 @@
         letter-spacing: 2px; text-transform: uppercase; pointer-events: none;
         display: none; z-index: 25;
       }
+      /* Big serif sign that fades in over the extraction as the bird flies off.
+         Sits above the skip hint but below the fade-to-black so it dissolves
+         into the end screen. pointer-events:none — never blocks the skip key. */
+      #missionComplete {
+        position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        font-family: Georgia, 'Times New Roman', serif; text-align: center;
+        color: #f4e2a8; letter-spacing: 10px; text-transform: uppercase;
+        font-size: 54px; line-height: 1.35; opacity: 0; pointer-events: none;
+        text-shadow: 0 2px 24px rgba(0,0,0,0.8), 0 0 40px rgba(244,226,168,0.25);
+        transition: opacity 900ms ease; z-index: 28;
+      }
+      #missionComplete .mc-sub {
+        display: block; margin-top: 10px; font-size: 16px; letter-spacing: 5px;
+        color: #cfe3ff; text-shadow: 0 2px 12px rgba(0,0,0,0.8);
+      }
 
       /* ---------- Shared menu / overlay chrome (Zelda-BotW-inspired) ---------- */
       .overlay {
@@ -321,6 +336,7 @@
     <!-- Cinematic fade-to-black + skip prompt for the opening drop-off -->
     <div id="fade"></div>
     <div id="skipHint">Press any key to skip</div>
+    <div id="missionComplete">Mission Complete<span class="mc-sub">Extraction Successful</span></div>
         <!-- Win/lose overlay — restart happens in place, no page refresh -->
     <div id="endScreen">
       <h1 id="endTitle"></h1>
