@@ -38,7 +38,6 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 // characters) is silently ignored and nothing shadows. Only the Level 3
 // vault spot actually casts, so this costs one 1024px map on one level.
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
@@ -116,21 +115,55 @@ scene.add(ambient);
 // changes (levels 1-3 all occupy the same world space, so only one is ever
 // loaded at a time).
 const levelLights = [];
-function addCeilingLights(positions, { color = 0xfff4e0, intensity = 6, distance = 7 } = {}) {
-  positions.forEach((pos) => {
+function addCeilingLights(positions, { color = 0xfff4e0, intensity = 6, distance = 7, shadowCount = 0 } = {}) {
+  // Only `shadowCount` fixtures cast shadows, sampled evenly across the level
+  // so every room gets one. A point-light shadow is a cube map (6 renders per
+  // light per frame), so turning it on for all ~10 fixtures would melt the
+  // lab PCs — 2-3 per level is the sweet spot for cost vs. look.
+  const shadowIdx = new Set();
+  if (shadowCount > 0) {
+    const n = Math.min(shadowCount, positions.length);
+    for (let k = 0; k < n; k++) shadowIdx.add(Math.floor((k + 0.5) * positions.length / n));
+  }
+  positions.forEach((pos, i) => {
     const light = new THREE.PointLight(color, intensity, distance);
     light.position.set(pos.x, pos.y - 0.3, pos.z);
+    if (shadowIdx.has(i)) {
+      light.castShadow = true;
+      light.shadow.mapSize.set(512, 512);
+      // Limit the cube faces to where the light actually reaches — objects
+      // past `distance` aren't lit anyway, so they don't belong in the map.
+      light.shadow.camera.near = 0.3;
+      light.shadow.camera.far = distance;
+      light.shadow.bias = -0.002;
+      light.shadow.normalBias = 0.03;   // kills floor acne under point lights
+    }
     scene.add(light);
     levelLights.push(light);
   });
 }
 // Level 1's rooms are ROOM_SCALE times bigger, so its ceiling lights need a
 // longer reach (and a bit more punch) to still overlap. Levels 2/3 pass their
-// own settings from LEVEL_CONFIG and are unaffected.
-const LEVEL1_LIGHT = { intensity: 6 * ROOM_SCALE, distance: 7 * ROOM_SCALE };
+// own settings from LEVEL_CONFIG and are unaffected. shadowCount gives each
+// zone (lobby / corridor / offices) one shadow-casting fixture.
+const LEVEL1_LIGHT = { intensity: 6 * ROOM_SCALE, distance: 7 * ROOM_SCALE, shadowCount: 3 };
 function clearCeilingLights() {
   levelLights.forEach((l) => scene.remove(l));
   levelLights.length = 0;
+}
+
+// Props cast shadows too, set in one sweep here instead of editing every prop
+// factory. All the gameplay/effect meshes (objective markers, laser beams,
+// vision cones, holograms, screens) are named marker_*, and floors/ceilings/
+// light panels by their own names — those stay non-casting. Everything else
+// (desks, cubicles, pillars, server racks, doors, crates) throws a shadow
+// from the shadow-casting fixtures. Floors/ceilings are receive-only, which
+// is the normal setup and avoids self-shadow acne.
+const NO_SHADOW_CAST = /^(marker_|light_|floor$|ceiling$)/;
+function enablePropShadows(root) {
+  root.traverse((o) => {
+    if (o.isMesh && !NO_SHADOW_CAST.test(o.name || '')) o.castShadow = true;
+  });
 }
 
 // Resize
@@ -372,6 +405,7 @@ function restartFromEndScreen() {
 
 // LEVEL
 const { root, colliders, elevatorPosition, elevatorDoors, elevatorIndicatorMat, keycardMesh, keyMesh, officeDoor, lightFixturePositions } = createLevel1(scene);
+enablePropShadows(root);
 addCeilingLights(lightFixturePositions, LEVEL1_LIGHT);
 
 // ---- Level management ------------------------------------------------------
@@ -393,7 +427,7 @@ const LEVEL_CONFIG = {
     ambient: { color: 0x1a2a3a, intensity: 0.3 },
     background: 0x05080c,
     // Level 2 is built with ROOM_SCALE like level 1, so its lights need the same longer reach.
-    light: { color: 0xaad4ff, intensity: 5 * ROOM_SCALE, distance: 7 * ROOM_SCALE },
+    light: { color: 0xaad4ff, intensity: 5 * ROOM_SCALE, distance: 7 * ROOM_SCALE, shadowCount: 3 },
     minimapSize: 10 * ROOM_SCALE,
     objectiveKey: 'terminalPosition', // (level 2 now uses levelHandle.missions instead; kept for reference)
     objectiveMarker: 'marker_terminal',
@@ -412,7 +446,7 @@ const LEVEL_CONFIG = {
     create: createLevel3,
     ambient: { color: 0x2a2a34, intensity: 0.5 },     // was 0x14141a / 0.2 - too dark now that the wing has mazes and a tile vault
     background: 0x050508,
-    light: { color: 0xffb060, intensity: 7, distance: 9 },   // was 4 / 6
+    light: { color: 0xffb060, intensity: 7, distance: 9, shadowCount: 2 },   // was 4 / 6
     objectiveKey: 'vaultItemPosition',
     objectiveMarker: 'marker_vaultItem',
     objectivePrompt: '[E] Take the artifact',
@@ -519,6 +553,7 @@ function loadLevel(n) {
 
   const cfg = LEVEL_CONFIG[n];
   levelHandle = cfg.create(scene, missionHooks);
+  enablePropShadows(levelHandle.root);
   colliders.push(...levelHandle.colliders);
   addCeilingLights(levelHandle.lightFixturePositions, cfg.light);
   if (levelHandle.dramaticFixturePositions) {

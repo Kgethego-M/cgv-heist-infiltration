@@ -112,12 +112,15 @@ const WAVE_EVERY = 16;                        // seconds between extra guards du
 function makeFloor(width, depth, x, z, y = 0, mat = floorMat) {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), mat);
   m.rotation.x = -Math.PI / 2; m.position.set(x, y, z);
+  m.name = 'floor';
   m.receiveShadow = true;   // floors catch the shadows (vault spot, characters)
   return m;
 }
 function makeCeiling(width, depth, x, y, z) {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), ceilingMat);
-  m.rotation.x = Math.PI / 2; m.position.set(x, y, z); return m;
+  m.rotation.x = Math.PI / 2; m.position.set(x, y, z);
+  m.name = 'ceiling';
+  return m;
 }
 function makeLightFixture(x, y, z, width = 1.0, depth = 1.0, dramatic = false) {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), dramatic ? vaultFixtureMat : fixtureMat);
@@ -125,7 +128,9 @@ function makeLightFixture(x, y, z, width = 1.0, depth = 1.0, dramatic = false) {
 }
 function makeWall(width, height, thickness, x, y, z, rotationY = 0) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(width, height, thickness), wallMat);
-  m.position.set(x, y, z); m.rotation.y = rotationY; return m;
+  m.position.set(x, y, z); m.rotation.y = rotationY;
+  m.receiveShadow = true;   // walls catch the shadows cast by characters
+  return m;
 }
 function makeCover(x, z, w = 0.9, d = 0.9, h = 2.4) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), coverMat);

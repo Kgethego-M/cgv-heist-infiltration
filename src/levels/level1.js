@@ -246,6 +246,7 @@ function makeFloor(width, depth, x, z, material = floorMat) {
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), material);
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(x, 0, z);
+  floor.name = 'floor';
   floor.receiveShadow = true;   // floors catch the shadows cast by characters/props
   return floor;
 }
@@ -258,6 +259,7 @@ function makeWall(width, height, thickness, x, y, z, rotationY = 0) {
   );
   wall.position.set(x, y, z);
   wall.rotation.y = rotationY;
+  wall.receiveShadow = true;   // walls catch the shadows cast by characters
   return wall;
 }
 function makeOfficeWall(width, height, thickness, x, y, z, rotationY = 0) {
@@ -267,6 +269,7 @@ function makeOfficeWall(width, height, thickness, x, y, z, rotationY = 0) {
   );
   wall.position.set(x, y, z);
   wall.rotation.y = rotationY;
+  wall.receiveShadow = true;   // walls catch the shadows cast by characters
   return wall;
 }
 // Ceiling plane — rotated the OPPOSITE way from the floor so its visible
@@ -275,6 +278,7 @@ function makeCeiling(width, depth, x, y, z) {
   const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), ceilingMat);
   ceiling.rotation.x = Math.PI / 2;
   ceiling.position.set(x, y, z);
+  ceiling.name = 'ceiling';
   return ceiling;
 }
 
