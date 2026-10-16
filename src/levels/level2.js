@@ -74,6 +74,7 @@ function makeFloor(width, depth, x, z) {
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(x, 0, z);
   floor.name = 'floor';
+  floor.receiveShadow = true;   // floors catch the shadows cast by characters/props
   return floor;
 }
 
@@ -107,6 +108,7 @@ function makeWall(width, height, thickness, x, y, z, rotationY = 0) {
   const wall = new THREE.Mesh(new THREE.BoxGeometry(width, height, thickness), wallMat);
   wall.position.set(x, y, z);
   wall.rotation.y = rotationY;
+  wall.receiveShadow = true;   // walls catch the shadows cast by characters
   return wall;
 }
 
