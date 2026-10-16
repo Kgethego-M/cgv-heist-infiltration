@@ -246,6 +246,7 @@ function makeFloor(width, depth, x, z, material = floorMat) {
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), material);
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(x, 0, z);
+  floor.receiveShadow = true;   // floors catch the shadows cast by characters/props
   return floor;
 }
 

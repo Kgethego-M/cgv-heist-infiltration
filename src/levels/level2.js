@@ -74,6 +74,7 @@ function makeFloor(width, depth, x, z) {
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(x, 0, z);
   floor.name = 'floor';
+  floor.receiveShadow = true;   // floors catch the shadows cast by characters/props
   return floor;
 }
 

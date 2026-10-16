@@ -33,6 +33,12 @@ const camera = new THREE.PerspectiveCamera(
 
 // 3. Renderer
 const renderer = new THREE.WebGLRenderer({ antialias: true });
+// Shadow maps are OFF by default in Three.js — without this line every
+// castShadow/receiveShadow flag in the game (the vault spotlight, the
+// characters) is silently ignored and nothing shadows. Only the Level 3
+// vault spot actually casts, so this costs one 1024px map on one level.
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
