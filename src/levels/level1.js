@@ -219,12 +219,23 @@ const elevatorIndicatorMat = new THREE.MeshStandardMaterial({
   emissiveIntensity: 1.1,
 });
 
-// Keycard face + the small emissive RFID chip in its corner.
+// Keycard face + the small glowing RFID chip in its corner.
+// Boosted emissive so the card pulses visibly on the desk (gameplay cue).
 const keycardMat = new THREE.MeshStandardMaterial({
-  map: makeKeycardMap(), roughness: 0.35, emissive: 0x2c4f78, emissiveIntensity: 0.15,
+  map: makeKeycardMap(), roughness: 0.35, emissive: 0x2c7fff, emissiveIntensity: 0.6,
 });
 const keycardChipMat = new THREE.MeshStandardMaterial({
-  color: 0xd9b34d, emissive: 0xd9b34d, emissiveIntensity: 0.9, roughness: 0.3, metalness: 0.6,
+  color: 0x44ccff, emissive: 0x44ccff, emissiveIntensity: 1.4, roughness: 0.3, metalness: 0.6,
+});
+// Steel cupboard materials — brushed steel locker for the hiding spot.
+const cupboardSteelMat = new THREE.MeshStandardMaterial({
+  color: 0x7a8088, roughness: 0.35, metalness: 0.85,
+});
+const cupboardDoorMat = new THREE.MeshStandardMaterial({
+  color: 0x8a9098, roughness: 0.3, metalness: 0.85,
+});
+const cupboardHandleMat = new THREE.MeshStandardMaterial({
+  color: 0x555555, roughness: 0.4, metalness: 0.9,
 });
 
 // Shared prop geometries — created ONCE, reused by every cubicle/desk
@@ -1254,6 +1265,48 @@ function makeVendingMachine(x, z, rotY) {
   return g;
 }
 
+// Steel cupboard — tall locker with ventilation slits on the front door.
+// The player can hide inside it; the slits let them see out while hidden.
+// `doorPivot` is returned so main.js can animate it swinging open.
+function makeSteelCupboard(x, z, rotY) {
+  const g = new THREE.Group();
+  g.name = 'furniture_steelCupboard';
+  g.position.set(x, 0, z);
+  g.rotation.y = rotY;
+
+  const bodyW = 0.8, bodyH = 2.0, bodyD = 0.55;
+  const body = box(bodyW, bodyH, bodyD, cupboardSteelMat, 0, bodyH / 2, 0);
+  body.name = 'collider_steelCupboard';
+  g.add(body);
+
+  g.add(decor(box(bodyW + 0.04, 0.03, bodyD + 0.04, cupboardSteelMat, 0, bodyH + 0.015, 0)));
+
+  for (let i = 0; i < 6; i++) {
+    const slitY = 0.4 + i * 0.22;
+    g.add(decor(box(0.5, 0.02, 0.01, cupboardHandleMat, 0, slitY, bodyD / 2 + 0.006)));
+  }
+
+  const doorPivot = new THREE.Group();
+  doorPivot.position.set(-bodyW / 2, 0, bodyD / 2);
+  doorPivot.name = 'cupboardDoorPivot';
+  const door = box(bodyW, bodyH - 0.06, 0.03, cupboardDoorMat, bodyW / 2, bodyH / 2, 0.015);
+  door.name = 'cupboardDoor';
+  doorPivot.add(door);
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.18, 8), cupboardHandleMat);
+  handle.position.set(bodyW - 0.1, bodyH / 2, 0.04);
+  handle.name = 'cupboardHandle';
+  doorPivot.add(decor(handle));
+  for (let i = 0; i < 6; i++) {
+    const slitY = 0.4 + i * 0.22;
+    doorPivot.add(decor(box(0.5, 0.02, 0.005, cupboardHandleMat, bodyW / 2, slitY, 0.032)));
+  }
+  g.add(doorPivot);
+
+  g.add(decor(box(bodyW + 0.02, 0.06, bodyD + 0.02, cupboardHandleMat, 0, 0.03, 0)));
+
+  return { group: g, doorPivot, position: new THREE.Vector3(x, 0, z) };
+}
+
 function makeBookcase(x, z, rotY, width = 1.6) {
   const g = new THREE.Group();
   g.name = 'furniture_bookcase';
@@ -1588,6 +1641,11 @@ export function createLevel1(scene) {
   cubicleZs.forEach((z) => cubicleXs.forEach((x) => offices.add(makeCubicle(x, z, cubicleIndex++))));
   addOfficeDressing(offices);
 
+  // Steel hiding cupboard — against the east wall, near the waiting couch
+  // and the Manager's office door. Door faces west (into the room).
+  const cupboard = makeSteelCupboard(10.0, 18.5, -Math.PI / 2);
+  offices.add(cupboard.group);
+
   // Manager's office — fully enclosed 6S x 6S room with lighter walls.
   const mgrOffice = new THREE.Group();
   mgrOffice.name = 'ManagerOffice';
@@ -1679,6 +1737,10 @@ return {
     keycardMesh,
     keyMesh,
     officeDoor,
+    cupboard: { doorPivot: cupboard.doorPivot, position: cupboard.position, group: cupboard.group },
+    cupboardDoorMat,
+    keycardMat,
+    keycardChipMat,
     lightFixturePositions,
     roomScale: S,
   };
