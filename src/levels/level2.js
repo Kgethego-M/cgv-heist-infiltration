@@ -1,6 +1,7 @@
 import * as THREE from 'three';
+import { makeSharedElevator } from './level1.js';
 import { ROOM_SCALE } from './level1.js';
-import { createVisionConeMaterial } from '../fx/shaders.js';
+import { createVisionConeMaterial, createLaserMaterial } from '../fx/shaders.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 // The same shared guard model Level 1 uses. Adjust this path if guards.js lives elsewhere.
 import { getGuardTemplate, loadGuardModel } from '../ai/guards.js';
@@ -221,11 +222,33 @@ function makeCamera(x, y, z, baseYaw, phase, lensMat, coneMat) {
 }
 
 function makeLaserGate(x, y, z, width, rotationY = 0, mat = markerMat.laser) {
-  const laser = new THREE.Mesh(new THREE.BoxGeometry(width, 0.03, 0.03), mat);
-  laser.position.set(x, y, z);
-  laser.rotation.y = rotationY;
-  laser.name = 'marker_laser';
-  return laser;
+  // makeLaserGate: Level 3 look. Two crossed shader beams (visible from any angle), an emitter box on each side and a
+  // glowing floor strip, like Level 3's. SAME inputs and output shape as the old bar, and the group sits exactly where the
+  // old bar did, so nothing that positions or removes it needs to change. It is always lethal here, so the shader's on/off
+  // cycle is parked inside one very long "on" period. 'mat' is the per-gate material level2.js flashes when a beam is
+  // tripped; it drives the emitters and the floor strip, so that flash still works.
+  const group = new THREE.Group();
+  group.name = 'LaserGate';
+  group.position.set(x, y, z);
+  group.rotation.y = rotationY;
+  const beamMat = createLaserMaterial({ color: 0xff2222, period: 100000, onTime: 99999, phase: 50 });
+  const span = width - 0.3;
+  const beamGeo = new THREE.PlaneGeometry(1, 0.55);
+  const v = new THREE.Mesh(beamGeo, beamMat);
+  v.scale.x = span;
+  const h = new THREE.Mesh(beamGeo, beamMat);
+  h.scale.x = span; h.rotation.x = Math.PI / 2;
+  v.name = h.name = 'marker_laser';
+  const strip = new THREE.Mesh(new THREE.PlaneGeometry(span, 0.4), mat);
+  strip.rotation.x = -Math.PI / 2; strip.position.y = 0.02 - y; strip.name = 'marker_laserStrip';
+  group.add(strip, v, h);
+  const emitterGeo = new THREE.BoxGeometry(0.22, 0.22, 0.22);
+  [-1, 1].forEach((side) => {
+    const e = new THREE.Mesh(emitterGeo, mat);
+    e.position.set(side * (width / 2 - 0.12), 0, 0);
+    group.add(e);
+  });
+  return group;
 }
 
 function makeWirePuzzlePanel(x, y, z, rotationY, backingMat) {
@@ -292,33 +315,40 @@ function makeSafe(x, z, rotationY, keypadMat) {
 // Elevator door set on a wall. Local +z faces into the room; origin is on
 // the room-side wall face. Doors slide into the side jambs when opened.
 function makeElevator(x, z, rotationY, indicatorMat) {
+  // The SAME model as Level 1's elevator (brushed-steel frame + doors, header readout, call button, low threshold),
+  // built by level1.js so every elevator in the game matches. The wall plane sits at local z = 0.15, so the frame
+  // protrudes 0.3 from the wall face like before.
+  const shared = makeSharedElevator(new THREE.Vector3(0, 0, 1.15));
   const group = new THREE.Group();
   group.position.set(x, 0, z);
   group.rotation.y = rotationY;
   group.name = 'elevator_exit';
+  group.add(shared.group);
 
-  const jambL = new THREE.Mesh(new THREE.BoxGeometry(0.7, 3.0, 0.3), frameMat);
-  jambL.position.set(-1.25, 1.5, 0.15);
-  const jambR = jambL.clone();
-  jambR.position.x = 1.25;
-  const head = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.4, 0.3), frameMat);
-  head.position.set(0, 2.8, 0.15);
-  const cab = new THREE.Mesh(new THREE.BoxGeometry(1.8, 2.6, 0.02), cavityMat);
+  // dark shaft behind the doors, so they open onto a void and not the plain wall
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(2.0, 2.6, 0.02), cavityMat);
   cab.position.set(0, 1.3, 0.01);
-  group.add(jambL, jambR, head, cab);
+  group.add(cab);
 
-  const doorL = new THREE.Mesh(new THREE.BoxGeometry(0.9, 2.6, 0.06), metalMat);
-  doorL.position.set(-0.45, 1.3, 0.06);
-  const doorR = new THREE.Mesh(new THREE.BoxGeometry(0.9, 2.6, 0.06), metalMat);
-  doorR.position.set(0.45, 1.3, 0.06);
-  group.add(doorL, doorR);
+  // Readout: Level 1's panel, but the glyph is drawn WHITE here so the colour of the material passed in
+  // (green for the entry, red for the exit, flipped to green when the terminal is hacked) is what you see.
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 120px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('L2', 128, 100);
+  ctx.beginPath(); ctx.moveTo(128, 150); ctx.lineTo(158, 190); ctx.lineTo(98, 190); ctx.closePath(); ctx.fill();
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  indicatorMat.map = tex;
+  indicatorMat.emissiveMap = tex;
+  indicatorMat.needsUpdate = true;
+  const readout = shared.group.getObjectByName('elevatorIndicator');
+  if (readout) readout.material = indicatorMat;
 
-  const indicator = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.12, 0.04), indicatorMat);
-  indicator.position.set(0, 2.8, 0.32);
-  indicator.name = 'elevator_indicator';
-  group.add(indicator);
-
-  return { group, doorL, doorR, closedX: 0.45, openX: 1.15 };
+  return { group, doorL: shared.doorLeft, doorR: shared.doorRight, closedX: 0.5, openX: 1.5 };
 }
 
 // ============================================================
@@ -1129,6 +1159,7 @@ export function createLevel2(scene, hooks = {}) {
   })));
   exitPad.position.set(EXIT_POS.x, 0.03, EXIT_POS.z);
   exitPad.name = 'marker_exit';
+  exitPad.layers.set(1);   // minimap-only marker: not drawn in the 3D view, still on the minimap
   term.add(exitPad);
   level2.add(term);
 
