@@ -6,7 +6,11 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import { GuardA, GuardB, loadGuardModel, attachGuardClip } from './ai/guards.js';
 import { Player, loadPlayerModel, attachPlayerClip } from './player/player.js';
 import { loadEarpieceAudio, playLine } from './audio/earpiece.js';
-import { fxTime } from './fx/shaders.js';
+import { fxTime, CinematicGradeShader } from './fx/shaders.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { createDropoff } from './scene/dropoff.js';
 import { createExtraction } from './scene/extraction.js';
 import { startMusic, setMusicLevel, setMusicIntensity } from './audio/music.js';
@@ -33,8 +37,20 @@ const camera = new THREE.PerspectiveCamera(
 
 // 3. Renderer
 const renderer = new THREE.WebGLRenderer({ antialias: true });
+// Shadow maps are OFF by default in Three.js — without this line every
+// castShadow/receiveShadow flag in the game (the vault spotlight, the
+// characters) is silently ignored and nothing shadows. Only the Level 3
+// vault spot actually casts, so this costs one 1024px map on one level.
+renderer.shadowMap.enabled = true;
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
+
+// Post-processing: cinematic grade pass (vignette, film grain, chromatic aberration)
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const cinematicPass = new ShaderPass(CinematicGradeShader);
+composer.addPass(cinematicPass);
+composer.addPass(new OutputPass());
 
 // 4. Pointer lock controls — mouse-look rotation only, we never call
 // controls.moveForward/moveRight
@@ -100,7 +116,7 @@ function setMissionUiOpen(open, relock) {
 // No hemisphere light — real ceiling fixtures (level1.js) are what light
 // the level now, same as a real office. Kept small and dim as a base so
 // unlit corners aren't pure black, not as the main light source.
-const ambient = new THREE.AmbientLight(0x1a1a2e, 0.25);
+const ambient = new THREE.AmbientLight(0x2a2a3e, 0.45);
 scene.add(ambient);
 
 // One PointLight per ceiling fixture — positions come straight from
@@ -110,21 +126,55 @@ scene.add(ambient);
 // changes (levels 1-3 all occupy the same world space, so only one is ever
 // loaded at a time).
 const levelLights = [];
-function addCeilingLights(positions, { color = 0xfff4e0, intensity = 6, distance = 7 } = {}) {
-  positions.forEach((pos) => {
+function addCeilingLights(positions, { color = 0xfff4e0, intensity = 6, distance = 7, shadowCount = 0 } = {}) {
+  // Only `shadowCount` fixtures cast shadows, sampled evenly across the level
+  // so every room gets one. A point-light shadow is a cube map (6 renders per
+  // light per frame), so turning it on for all ~10 fixtures would melt the
+  // lab PCs — 2-3 per level is the sweet spot for cost vs. look.
+  const shadowIdx = new Set();
+  if (shadowCount > 0) {
+    const n = Math.min(shadowCount, positions.length);
+    for (let k = 0; k < n; k++) shadowIdx.add(Math.floor((k + 0.5) * positions.length / n));
+  }
+  positions.forEach((pos, i) => {
     const light = new THREE.PointLight(color, intensity, distance);
     light.position.set(pos.x, pos.y - 0.3, pos.z);
+    if (shadowIdx.has(i)) {
+      light.castShadow = true;
+      light.shadow.mapSize.set(512, 512);
+      // Limit the cube faces to where the light actually reaches — objects
+      // past `distance` aren't lit anyway, so they don't belong in the map.
+      light.shadow.camera.near = 0.3;
+      light.shadow.camera.far = distance;
+      light.shadow.bias = -0.002;
+      light.shadow.normalBias = 0.03;   // kills floor acne under point lights
+    }
     scene.add(light);
     levelLights.push(light);
   });
 }
 // Level 1's rooms are ROOM_SCALE times bigger, so its ceiling lights need a
 // longer reach (and a bit more punch) to still overlap. Levels 2/3 pass their
-// own settings from LEVEL_CONFIG and are unaffected.
-const LEVEL1_LIGHT = { intensity: 6 * ROOM_SCALE, distance: 7 * ROOM_SCALE };
+// own settings from LEVEL_CONFIG and are unaffected. shadowCount gives each
+// zone (lobby / corridor / offices) one shadow-casting fixture.
+const LEVEL1_LIGHT = { intensity: 6 * ROOM_SCALE, distance: 7 * ROOM_SCALE, shadowCount: 3 };
 function clearCeilingLights() {
   levelLights.forEach((l) => scene.remove(l));
   levelLights.length = 0;
+}
+
+// Props cast shadows too, set in one sweep here instead of editing every prop
+// factory. All the gameplay/effect meshes (objective markers, laser beams,
+// vision cones, holograms, screens) are named marker_*, and floors/ceilings/
+// light panels by their own names — those stay non-casting. Everything else
+// (desks, cubicles, pillars, server racks, doors, crates) throws a shadow
+// from the shadow-casting fixtures. Floors/ceilings are receive-only, which
+// is the normal setup and avoids self-shadow acne.
+const NO_SHADOW_CAST = /^(marker_|light_|floor$|ceiling$)/;
+function enablePropShadows(root) {
+  root.traverse((o) => {
+    if (o.isMesh && !NO_SHADOW_CAST.test(o.name || '')) o.castShadow = true;
+  });
 }
 
 // Resize
@@ -132,6 +182,7 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
 });
 
 // ---- Alarm beacon ---------------------------------------------------------
@@ -239,6 +290,10 @@ const game = {
   objectiveComplete: false, // levels 2+ : terminal hacked / artifact taken
   escapeTimeRemaining: null,
   alarmsRaised: 0,
+  // Hiding cupboard state — read by GuardB to decide vision / confused patrol
+  isHidden: false,
+  guardSawPlayerHide: false,
+  get playerHidden() { return this.isHidden && !this.guardSawPlayerHide; },
 
   triggerAlarm(reason) {
     if (this.alarmActive) return;
@@ -365,7 +420,8 @@ function restartFromEndScreen() {
 }
 
 // LEVEL
-const { root, colliders, elevatorPosition, elevatorDoors, elevatorIndicatorMat, keycardMesh, keyMesh, officeDoor, lightFixturePositions } = createLevel1(scene);
+const { root, colliders, elevatorPosition, elevatorDoors, elevatorIndicatorMat, keycardMesh, keyMesh, officeDoor, cupboard, cupboardDoorMat, keycardMat, keycardChipMat, alarmPulseMat, emergencyLightMat, lightFixturePositions } = createLevel1(scene);
+enablePropShadows(root);
 addCeilingLights(lightFixturePositions, LEVEL1_LIGHT);
 
 // ---- Level management ------------------------------------------------------
@@ -384,10 +440,10 @@ const LEVEL_CONFIG = {
   2: {
     name: 'Server Room & Labs',
     create: createLevel2,
-    ambient: { color: 0x1a2a3a, intensity: 0.3 },
+    ambient: { color: 0x2a3a4a, intensity: 0.55 },
     background: 0x05080c,
     // Level 2 is built with ROOM_SCALE like level 1, so its lights need the same longer reach.
-    light: { color: 0xaad4ff, intensity: 5 * ROOM_SCALE, distance: 7 * ROOM_SCALE },
+    light: { color: 0xaad4ff, intensity: 7 * ROOM_SCALE, distance: 9 * ROOM_SCALE, shadowCount: 3 },
     minimapSize: 10 * ROOM_SCALE,
     objectiveKey: 'terminalPosition', // (level 2 now uses levelHandle.missions instead; kept for reference)
     objectiveMarker: 'marker_terminal',
@@ -404,9 +460,9 @@ const LEVEL_CONFIG = {
   3: {
     name: 'Vault Wing',
     create: createLevel3,
-    ambient: { color: 0x2a2a34, intensity: 0.5 },     // was 0x14141a / 0.2 - too dark now that the wing has mazes and a tile vault
+    ambient: { color: 0x3a3a44, intensity: 0.7 },     // boosted for visibility
     background: 0x050508,
-    light: { color: 0xffb060, intensity: 7, distance: 9 },   // was 4 / 6
+    light: { color: 0xffb060, intensity: 7, distance: 9, shadowCount: 2 },   // was 4 / 6
     objectiveKey: 'vaultItemPosition',
     objectiveMarker: 'marker_vaultItem',
     objectivePrompt: '[E] Take the artifact',
@@ -478,8 +534,15 @@ function resetCommonState() {
   game.objectiveComplete = false;
   game.escapeTimeRemaining = null;
   game.alarmsRaised = 0;
+  game.isHidden = false;
+  game.guardSawPlayerHide = false;
   isProne = false;
   isWallHugging = false;
+  isHidden = false;
+  cupboardDoorTarget = 0;
+  cupboardDoorGoal = 0;
+  hideBonusApplied = false;
+  guardSawPlayerHide = false;
   lastNoCardWarn = 0;
   playerBusy = false;      // a retry mid-action must not stay rooted
   busyLabel = null;
@@ -513,6 +576,7 @@ function loadLevel(n) {
 
   const cfg = LEVEL_CONFIG[n];
   levelHandle = cfg.create(scene, missionHooks);
+  enablePropShadows(levelHandle.root);
   colliders.push(...levelHandle.colliders);
   addCeilingLights(levelHandle.lightFixturePositions, cfg.light);
   if (levelHandle.dramaticFixturePositions) {
@@ -665,7 +729,8 @@ const _sceneBeforeGuards = new Set(scene.children);
 // measured clear of the desk by 0.71 m.
 const GUARD_A_POS = new THREE.Vector3(-2.5 * ROOM_SCALE, 0, 2.47 * ROOM_SCALE);
 const GUARD_A_FALL_YAW = -Math.PI / 2;
-const guardA = new GuardA(scene, game, GUARD_A_POS, { fallYaw: GUARD_A_FALL_YAW });
+// Face north (+z, toward the back wall) so the player approaches from behind
+const guardA = new GuardA(scene, game, GUARD_A_POS, { fallYaw: GUARD_A_FALL_YAW, faceRotation: 0 });
 
 // Original loop scaled by ROOM_SCALE, except waypoint 2: the old spot (4, 3)
 // is now inside the waiting area (armchair / coffee table), so it's pulled
@@ -681,7 +746,12 @@ const waypoints = [
   new THREE.Vector3(0, 0, 10.2 * S),
   new THREE.Vector3(0, 0, 8 * S),
 ];
-const guardB = new GuardB(scene, waypoints, colliders, game, { partnerCheckIndex: 3, checkCollision });
+const guardB = new GuardB(scene, waypoints, colliders, game, {
+  partnerCheckIndex: 3,
+  checkCollision,
+  cupboardPosition: cupboard ? cupboard.position : null,
+  managerDoorPosition: new THREE.Vector3(4 * S, 0, 15 * S), // manager's door position
+});
 const guardObjects = scene.children.filter((c) => !_sceneBeforeGuards.has(c));
 function setGuardsVisible(v) { guardObjects.forEach((o) => { o.visible = v; }); }
 
@@ -1266,8 +1336,8 @@ function updateWallHug(dt) {
 
   _wallRight.set(_wallNormal.z, 0, -_wallNormal.x);
   let strafe = 0;
-  if (keys['d']) strafe += 1;
-  if (keys['a']) strafe -= 1;
+  if (keys['d'] || keys['arrowright']) strafe += 1;
+  if (keys['a'] || keys['arrowleft']) strafe -= 1;
 
   if (strafe !== 0) {
     const nextX = player.group.position.x + _wallRight.x * strafe * WALL_HUG_SPEED * dt;
@@ -1328,6 +1398,77 @@ function tryUnlockOfficeDoor() {
   return true;
 }
 
+ // ---- Hiding cupboard -------------------------------------------------------
+ const CUPBOARD_INTERACT_DIST = 1.8;
+ const CUPBOARD_DOOR_OPEN_ANGLE = -Math.PI / 2; // swings outward
+ const CUPBOARD_DOOR_ANIM_SPEED = 2.5; // radians/sec
+ let isHidden = false;
+ let cupboardDoorTarget = 0; // current door pivot angle (0 = closed)
+ let cupboardDoorGoal = 0;  // target angle
+ let guardSawPlayerHide = false; // true if Guard B saw the player enter
+ let hideBonusApplied = false;  // +45s applied once per hide during alarm
+ let doorCloseTimer = -1;      // countdown to close door after entering (-1 = inactive)
+ 
+ function nearCupboard() {
+   if (!cupboard) return false;
+   return distanceXZ(player.group.position, cupboard.position) <= CUPBOARD_INTERACT_DIST;
+ }
+ 
+ function enterCupboard() {
+   if (isHidden) return;
+   isHidden = true;
+   game.isHidden = true;
+   cupboardDoorGoal = CUPBOARD_DOOR_OPEN_ANGLE;
+   doorCloseTimer = 1.0; // close the door after 1 second
+   player.group.position.copy(cupboard.position);
+   // Make door semi-transparent so the player can see out through the slits
+   if (cupboardDoorMat) {
+     cupboardDoorMat.transparent = true;
+     cupboardDoorMat.opacity = 0.15;
+     cupboardDoorMat.needsUpdate = true;
+   }
+   if (game.alarmActive && !hideBonusApplied) {
+     game.escapeTimeRemaining = (game.escapeTimeRemaining || 0) + 45;
+     hideBonusApplied = true;
+     showSubtitle('Hidden! +45 seconds added to the escape clock.', 3000);
+   }
+ }
+ 
+ function exitCupboard() {
+   if (!isHidden) return;
+   isHidden = false;
+   game.isHidden = false;
+   game.guardSawPlayerHide = false;
+   doorCloseTimer = -1;
+   cupboardDoorGoal = 0;
+   hideBonusApplied = false;
+   // Restore door to fully opaque
+   if (cupboardDoorMat) {
+     cupboardDoorMat.opacity = 1.0;
+     cupboardDoorMat.transparent = false;
+     cupboardDoorMat.needsUpdate = true;
+   }
+   const outOffset = new THREE.Vector3(0, 0, 0.8);
+   outOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), cupboard.group.rotation.y);
+   player.group.position.copy(cupboard.position).add(outOffset);
+ }
+ 
+ function updateCupboardDoor(dt) {
+   if (!cupboard) return;
+   // After entering, count down then close the door
+   if (doorCloseTimer > 0) {
+     doorCloseTimer -= dt;
+     if (doorCloseTimer <= 0) {
+       doorCloseTimer = -1;
+       cupboardDoorGoal = 0; // close the door
+     }
+   }
+   const diff = cupboardDoorGoal - cupboardDoorTarget;
+   if (Math.abs(diff) < 0.01) { cupboardDoorTarget = cupboardDoorGoal; }
+   else { cupboardDoorTarget += Math.sign(diff) * Math.min(Math.abs(diff), CUPBOARD_DOOR_ANIM_SPEED * dt); }
+   cupboard.doorPivot.rotation.y = cupboardDoorTarget;
+ }
+ 
  function tryPickupKeycard() {
   if (game.hasKeycard) return false;
   if (distanceXZ(player.group.position, keycardMesh.position) > KEYCARD_INTERACT_DISTANCE) return false;
@@ -1346,6 +1487,8 @@ function tryInteract() {
   }
   if (playerBusy) return; // mid takedown / pickup — ignore new interactions
   const pos = player.group.position;
+  // If hidden in the cupboard, E exits it
+  if (isHidden) { exitCupboard(); return; }
   // Guard A: two-punch takedown, then kneel to take the key.
   if (guardA.horizDistanceTo(pos) <= guardA.interactDistance) {
     if (!guardA.down) { startTakedown(); return; }
@@ -1354,7 +1497,10 @@ function tryInteract() {
   if (nearOfficeDoor()) { tryUnlockOfficeDoor(); return; }
   if (!game.hasKeycard && distanceXZ(pos, keycardMesh.position) <= KEYCARD_INTERACT_DISTANCE) {
     startPickup('card'); // kneel-and-take animation for the access card too
+    return;
   }
+  // Cupboard hiding spot
+  if (nearCupboard()) { enterCupboard(); return; }
 }
 const GUARD_A_LINGER_RANGE = 4 * ROOM_SCALE;
 const GUARD_A_LINGER_TIME = 1.2; // seconds of continuous proximity before the line fires
@@ -1389,9 +1535,8 @@ function getInteractPrompt() {
     if (levelHandle && levelHandle.missions) return levelHandle.missions.getPrompt(player.group.position);
     return nearObjective() ? LEVEL_CONFIG[currentLevel].objectivePrompt : null;
   }
-  // A scripted action owns the player: say what it is doing rather than showing
-  // an actionable [E] prompt the player will mash against to no effect.
   if (playerBusy) return busyLabel;
+  if (isHidden) return '[E] Exit hiding spot';
   const guardPrompt = guardA.getPrompt(player.group.position);
   if (guardPrompt) return guardPrompt;
   if (nearOfficeDoor()) {
@@ -1400,6 +1545,7 @@ function getInteractPrompt() {
   if (!game.hasKeycard && distanceXZ(player.group.position, keycardMesh.position) <= KEYCARD_INTERACT_DISTANCE) {
     return '[E] Pick up access card';
   }
+  if (nearCupboard()) return '[E] Hide in cupboard';
   return null;
 }
 
@@ -1464,6 +1610,16 @@ function resetLevel1() {
   guardALingerTimer = 0;
   hasWarnedGuardAPartner = false;
   hasEnteredOffices = false;
+
+  // Reset hiding cupboard state
+  isHidden = false;
+  game.isHidden = false;
+  game.guardSawPlayerHide = false;
+  guardSawPlayerHide = false;
+  cupboardDoorTarget = 0;
+  cupboardDoorGoal = 0;
+  hideBonusApplied = false;
+  if (cupboard) cupboard.doorPivot.rotation.y = 0;
 
   playerBusy = false;      // clear any mid-takedown/pickup lock from the failed attempt
   busyLabel = null;
@@ -1532,10 +1688,10 @@ function updateMovement(dt) {
   _camRight.set(-_camForward.z, 0, _camForward.x);
 
   _moveDir.set(0, 0, 0);
-  if (keys['w']) _moveDir.add(_camForward);
-  if (keys['s']) _moveDir.sub(_camForward);
-  if (keys['a']) _moveDir.sub(_camRight);
-  if (keys['d']) _moveDir.add(_camRight);
+  if (keys['w'] || keys['arrowup']) _moveDir.add(_camForward);
+  if (keys['s'] || keys['arrowdown']) _moveDir.sub(_camForward);
+  if (keys['a'] || keys['arrowleft']) _moveDir.sub(_camRight);
+  if (keys['d'] || keys['arrowright']) _moveDir.add(_camRight);
 
   const isMoving = _moveDir.lengthSq() > 0;
   const isCrouching = keys['control'] && !isProne;
@@ -1659,6 +1815,7 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.elapsedTime;
   fxTime.value = elapsed; // drives every custom shader's time uniform
+  cinematicPass.uniforms.uTime.value = elapsed; // animate the film grain
 
     if (inMenu) {
     updateMenuCamera(elapsed);
@@ -1684,7 +1841,12 @@ function animate() {
     player.playAction('Idle');
     player.update(dt);
   } else if (!game.levelComplete && !endScreenVisible()) {
-    updateMovement(dt);
+    // While hidden in the cupboard the player cannot move, but guards still update
+    if (!isHidden) {
+      updateMovement(dt);
+    } else {
+      player.playAction('Idle');
+    }
     if (levelHandle && levelHandle.getFloorHeight) {   // level 3: stairs up to the roof, tiles that collapse
       const pp = player.group.position;
       pp.y += (levelHandle.getFloorHeight(pp.x, pp.z) - pp.y) * Math.min(1, dt * 14);
@@ -1694,9 +1856,12 @@ function animate() {
     if (currentLevel === 1) {
       guardA.update(dt);
       guardB.update(dt, player.group.position);
+      // Sync guard detection of player hiding
+      game.guardSawPlayerHide = game.guardSawPlayerHide || guardB.sawPlayerHide;
       checkGuardAProximity(dt);
       checkOfficesEntry();
       checkElevator(dt, elapsed);
+      updateCupboardDoor(dt);
     } else {
       if (levelHandle && levelHandle.missions) {
         levelHandle.missions.update(dt, elapsed, player.group.position, !!keys['e']);
@@ -1724,6 +1889,23 @@ function animate() {
     ambient.intensity = 0.35 + pulse * 0.55;
   }
   updateAlarmBeacon(elapsed);
+
+  // Keycard glow pulse — the RFID chip and card face breathe so the card
+  // is easy to spot on the manager's desk.
+  if (keycardMesh.visible && keycardMat && keycardChipMat) {
+    const glow = 0.4 + 0.35 * Math.sin(elapsed * 3.5);
+    keycardMat.emissiveIntensity = 0.3 + glow * 0.5;
+    keycardChipMat.emissiveIntensity = 0.8 + glow * 0.8;
+  }
+
+  // Alarm pulse shader — lobby walls glow red during alarm
+  if (alarmPulseMat) {
+    alarmPulseMat.uniforms.uAlarm.value = game.alarmActive && !game.levelComplete ? 1.0 : 0.0;
+  }
+  // Emergency light strips — glow red during alarm
+  if (emergencyLightMat) {
+    emergencyLightMat.uniforms.uAlarm.value = game.alarmActive && !game.levelComplete ? 1.0 : 0.0;
+  }
   // soundtrack reacts to the game: calm -> tense as alarms / guard detection rise
   if (extractionActive) setMusicIntensity(0);   // let the celebratory sting carry the ending
   else if (!inMenu && !paused) setMusicIntensity(game.alarmActive ? 1 : ((levelHandle && levelHandle.threat) || 0));
@@ -1737,7 +1919,7 @@ function animate() {
   controlsPanelEl.style.display = hudLive ? 'block' : 'none';
   minimapEl.style.display = hudLive ? 'block' : 'none';
 
-  renderer.render(scene, camera);
+  composer.render();
   updateMinimap();
 }
 animate();

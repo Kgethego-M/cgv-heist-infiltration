@@ -109,7 +109,9 @@ export class GuardA {
     this.group.add(this.body);
 
     this.group.position.copy(position);
-    this.baseRotation = Math.atan2(-position.x, -position.z);
+    // faceRotation overrides the default "face the origin" calculation so the
+    // guard can be turned to face away from the player's approach direction.
+    this.baseRotation = options.faceRotation ?? Math.atan2(-position.x, -position.z);
     this.group.rotation.y = this.baseRotation;
     scene.add(this.group);
 
@@ -220,15 +222,16 @@ export class GuardA {
 }
 
 // GUARD B — patrols, sees the player, raises the alarm, then chases.
+// Enhanced: better wall avoidance (turns when stuck), confused state with
+// "?" marker when player hides unseen, and cupboard investigation.
 export class GuardB {
   constructor(scene, waypoints, colliders, game, options = {}) {
     this.waypoints = waypoints;
     this.colliders = colliders;
     this.game = game;
     this.partnerCheckIndex = options.partnerCheckIndex ?? -1;
-    // Reuses the exact same collision system as the player (same colliders,
-    // same boxes) rather than duplicating it here. Falls back to "never
-    // blocked" if main.js doesn't pass one, so nothing breaks if omitted.
+    this.cupboardPosition = options.cupboardPosition || null;
+    this.managerDoorPosition = options.managerDoorPosition || null;
     this.checkCollision = options.checkCollision || (() => false);
 
     this.state = 'patrol';
@@ -245,10 +248,17 @@ export class GuardB {
     this.checkTimer = 0;
     this.catchDistance = 1.2;
 
-    // Stuck-recovery: straight-line steering has no pathfinding, so he can
-    // wedge against a wall corner or furniture edge. Not real navigation —
-    // just a fallback so he doesn't freeze in place when that happens.
+    // True from the frame the guard visually confirms the player stepping
+    // into the cupboard until the player exits or the level resets.
+    this.sawPlayerHide = false;
+    // Set when the guard enters the "confused" search state (player hid
+    // unseen). Drives the "?" marker above the head.
+    this.isConfused = false;
+    this.confusedTimer = 0;
+    this.confusedDuration = 8; // seconds of milling about before resuming patrol
+
     this._stuckTime = 0;
+    this._turnCooldown = 0;
 
     this._dir = new THREE.Vector3();
     this._toPlayer = new THREE.Vector3();
@@ -266,11 +276,34 @@ export class GuardB {
     this.currentAction = null;
     this.group.add(this.body);
 
+    // Question-mark sprite above the head (confused state indicator)
+    this.questionMark = this._makeQuestionMark();
+    this.questionMark.visible = false;
+    this.group.add(this.questionMark);
+
     this.group.position.copy(waypoints[0]);
     this.faceWaypoint(1);
     scene.add(this.group);
 
     if (this.mixer) playAction(this, 'Idle');
+  }
+
+  _makeQuestionMark() {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffee33';
+    ctx.font = 'bold 56px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('?', 32, 30);
+    const tex = new THREE.CanvasTexture(canvas);
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(0.5, 0.5, 1);
+    sprite.position.set(0, 2.4, 0);
+    sprite.name = 'guardQuestionMark';
+    return sprite;
   }
 
   faceWaypoint(i) {
@@ -284,22 +317,91 @@ export class GuardB {
 
   update(dt, playerPos) {
     this.mixer?.update(dt);
+    this._turnCooldown = Math.max(0, this._turnCooldown - dt);
 
-    if (this.state !== 'chase' && this.game.alarmActive) {
+    // If the player is hidden and the guard did NOT see them enter,
+    // the guard cannot spot them — skip vision checks entirely.
+    const playerInvisible = this.game.playerHidden;
+
+    // Alarm escalation: if the alarm is active and the guard isn't already
+    // chasing, confused, or heading to the office, start the chase.
+    if (this.state !== 'chase' && this.state !== 'confused' && this.state !== 'goToOffice' && this.game.alarmActive) {
       this.state = 'chase';
     }
+
+    // If the player just hid and the guard saw it, investigate the cupboard
+    if (this.game.isHidden && this.sawPlayerHide && this.state !== 'investigateCupboard') {
+      this.state = 'investigateCupboard';
+    }
+
+    // goToOffice: player hid unseen, guard runs to the manager's office then becomes confused
+    if (this.state === 'goToOffice') {
+      if (this.mixer) playAction(this, 'Run');
+      const target = this.managerDoorPosition || this.cupboardPosition || this.waypoints[this.waypoints.length - 1];
+      const dist = this._moveToward(target, this.chaseSpeed, dt);
+      if (dist < 1.5) {
+        this.state = 'confused';
+        this.isConfused = true;
+        this.confusedTimer = this.confusedDuration;
+      }
+      return;
+    }
+
+    // Confused state: player hid unseen, guard reached the area but lost them
+    if (this.state === 'confused') {
+      if (this.mixer) playAction(this, 'Idle');
+      this.questionMark.visible = true;
+      this.confusedTimer -= dt;
+      // Slowly look around (yaw oscillation)
+      this.group.rotation.y += Math.sin(this.confusedTimer * 2) * 0.02;
+      if (this.confusedTimer <= 0) {
+        this.isConfused = false;
+        this.questionMark.visible = false;
+        this.state = 'patrol';
+        this.index = (this.index + 1) % this.waypoints.length;
+      }
+      return;
+    }
+
+    // Investigate cupboard: run to the cupboard position and catch the player
+    if (this.state === 'investigateCupboard') {
+      if (this.mixer) playAction(this, 'Run');
+      if (this.cupboardPosition) {
+        const dist = this._moveToward(this.cupboardPosition, this.chaseSpeed, dt);
+        if (dist < 1.0) {
+          // Reached the cupboard — catch the hidden player
+          this.game.onCaught('cupboard_found', 'The guard found you in the cupboard!');
+          return;
+        }
+      }
+      return;
+    }
+
     if (this.state === 'chase') {
       if (this.mixer) playAction(this, 'Run');
       this.updateChase(dt, playerPos);
       return;
     }
 
+    // Vision check — only if the player is visible
     this.checkTimer += dt;
     if (this.checkTimer >= this.checkInterval) {
       this.checkTimer = 0;
-      if (this.canSeePlayer(playerPos)) {
+      if (!playerInvisible && this.canSeePlayer(playerPos)) {
+        // Check if the player is at the cupboard (hiding)
+        if (this.game.isHidden) {
+          this.sawPlayerHide = true;
+        }
         this.game.triggerAlarm('player_spotted');
         return;
+      }
+    }
+
+    // If the player just entered the cupboard and we can currently see them
+    // (they haven't fully disappeared yet), record that we saw them hide.
+    if (this.game.isHidden && !playerInvisible && !this.sawPlayerHide) {
+      if (this.canSeePlayer(playerPos)) {
+        this.sawPlayerHide = true;
       }
     }
 
@@ -328,7 +430,12 @@ export class GuardB {
 
       this._stuckTime = (blockedX && blockedZ) ? this._stuckTime + dt : 0;
       if (this._stuckTime > 0.4) {
-        // Fully wedged — sidestep 90° from his intended direction until clear
+        // Fully wedged — turn 90 degrees to find a clear direction
+        if (this._turnCooldown <= 0) {
+          this.group.rotation.y += (Math.random() > 0.5 ? 1 : -1) * Math.PI / 2;
+          this._turnCooldown = 0.6;
+          this._stuckTime = 0;
+        }
         const perpX = this._dir.z;
         const perpZ = -this._dir.x;
         const sideX = this.group.position.x + perpX * step;
@@ -343,15 +450,47 @@ export class GuardB {
     }
   }
 
+  _moveToward(target, speed, dt) {
+    this._dir.set(target.x - this.group.position.x, 0, target.z - this.group.position.z);
+    const dist = this._dir.length();
+    if (dist < 0.1) return dist;
+    this._dir.normalize();
+    const step = speed * dt;
+    const nextX = this.group.position.x + this._dir.x * step;
+    const nextZ = this.group.position.z + this._dir.z * step;
+    const blockedX = this.checkCollision(nextX, this.group.position.z);
+    const blockedZ = this.checkCollision(this.group.position.x, nextZ);
+    if (!blockedX) this.group.position.x = nextX;
+    if (!blockedZ) this.group.position.z = nextZ;
+
+    this._stuckTime = (blockedX && blockedZ) ? this._stuckTime + dt : 0;
+    if (this._stuckTime > 0.4 && this._turnCooldown <= 0) {
+      this.group.rotation.y += (Math.random() > 0.5 ? 1 : -1) * Math.PI / 2;
+      this._turnCooldown = 0.6;
+      this._stuckTime = 0;
+    }
+
+    this.group.rotation.y = Math.atan2(this._dir.x, this._dir.z);
+    return dist;
+  }
+
   arriveAtWaypoint() {
     if (this.index === this.partnerCheckIndex && this.game.guardADown) {
       this.game.triggerAlarm('partner_found');
+    }
+    // If the player just hid and we didn't see it, head to the office confused
+    if (this.game.playerHidden && !this.sawPlayerHide) {
+      this.state = 'goToOffice';
+      return;
     }
     this.state = 'pause';
     this.pauseTimer = this.pauseTime;
   }
 
   canSeePlayer(playerPos) {
+    // If the player is successfully hidden (guard didn't see them enter), skip
+    if (this.game.playerHidden) return false;
+
     this._toPlayer.subVectors(playerPos, this.group.position);
     this._toPlayer.y = 0;
     const dist = this._toPlayer.length();
@@ -372,33 +511,17 @@ export class GuardB {
   }
 
   updateChase(dt, playerPos) {
-    this._dir.subVectors(playerPos, this.group.position);
-    this._dir.y = 0;
-    const dist = this._dir.length();
-    if (dist < this.catchDistance) {
-      this.game.onCaught();
+    // If the player is hidden and the guard didn't see them hide,
+    // lose the chase and head to the office to search
+    if (this.game.playerHidden && !this.sawPlayerHide) {
+      this.state = 'goToOffice';
       return;
     }
-    this._dir.normalize();
-    const step = this.chaseSpeed * dt;
-    const nextX = this.group.position.x + this._dir.x * step;
-    const nextZ = this.group.position.z + this._dir.z * step;
-    const blockedX = this.checkCollision(nextX, this.group.position.z);
-    const blockedZ = this.checkCollision(this.group.position.x, nextZ);
-    if (!blockedX) this.group.position.x = nextX;
-    if (!blockedZ) this.group.position.z = nextZ;
 
-    this._stuckTime = (blockedX && blockedZ) ? this._stuckTime + dt : 0;
-    if (this._stuckTime > 0.4) {
-      const perpX = this._dir.z;
-      const perpZ = -this._dir.x;
-      const sideX = this.group.position.x + perpX * step;
-      const sideZ = this.group.position.z + perpZ * step;
-      if (!this.checkCollision(sideX, this.group.position.z)) this.group.position.x = sideX;
-      if (!this.checkCollision(this.group.position.x, sideZ)) this.group.position.z = sideZ;
+    const dist = this._moveToward(playerPos, this.chaseSpeed, dt);
+    if (dist < this.catchDistance) {
+      this.game.onCaught();
     }
-
-    this.group.rotation.y = Math.atan2(this._dir.x, this._dir.z);
   }
 
   reset() {
@@ -407,6 +530,11 @@ export class GuardB {
     this.pauseTimer = 0;
     this.checkTimer = 0;
     this._stuckTime = 0;
+    this._turnCooldown = 0;
+    this.sawPlayerHide = false;
+    this.isConfused = false;
+    this.confusedTimer = 0;
+    this.questionMark.visible = false;
     this.group.position.copy(this.waypoints[0]);
     this.faceWaypoint(1);
     if (this.mixer) playAction(this, 'Idle');
