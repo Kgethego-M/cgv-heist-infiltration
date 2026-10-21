@@ -562,6 +562,7 @@ export function createLevel3(scene, hooks = {}) {
   const entryMarker = new THREE.Mesh(new THREE.BoxGeometry(2, 0.1, 2), exitMat);
   entryMarker.position.set(0, 0.05, -2.5);
   entryMarker.name = 'marker_entry';
+  entryMarker.layers.set(1);   // minimap-only marker: not drawn in the 3D view, still on the minimap
   checkpoint.add(entryMarker);
   checkpoint.add(makeNote(-1.2, 1.3, -0.8 - 0.47, 0));     // the lock-keypad code, on the first pillar
   level3.add(checkpoint);
@@ -856,6 +857,7 @@ export function createLevel3(scene, hooks = {}) {
   const exitPad = new THREE.Mesh(new THREE.BoxGeometry(2, 0.05, 2), exitMat);
   exitPad.position.set(EXIT_POS.x, ROOF.y + 0.03, EXIT_POS.z);
   exitPad.name = 'marker_exit';
+  exitPad.layers.set(1);   // minimap-only marker: not drawn in the 3D view, still on the minimap
   escape.add(exitPad);
   const squadMat = track(new THREE.MeshStandardMaterial({ color: 0x1f6f66, emissive: 0x2fd0c0, emissiveIntensity: 0.35 }));
   const squadGeo = new THREE.CapsuleGeometry(0.3, 1.2, 4, 12);
