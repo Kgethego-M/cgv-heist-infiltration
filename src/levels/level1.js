@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createAlarmPulseMaterial, createEmergencyLightMaterial } from '../fx/shaders.js';
 
 // ---- ROOM SCALE ----------------------------------------------------------
 // Horizontal multiplier applied to every room footprint, wall position,
@@ -1558,6 +1559,39 @@ export function createLevel1(scene) {
   lobby.add(makeWall(10 * S, 4, 0.2, -6 * S, 2, 0, Math.PI / 2)); // left wall
   lobby.add(makeWall(10 * S, 4, 0.2, 6 * S, 2, 0, Math.PI / 2));  // right wall
 
+  // Alarm pulse panels — thin planes on the lobby walls that glow red during alarm.
+  // main.js drives the uAlarm uniform via the exported alarmPulseMat.
+  const alarmPulseMat = createAlarmPulseMaterial({ color: 0xff1111 });
+  const alarmPanel1 = new THREE.Mesh(new THREE.PlaneGeometry(12 * S, 3.5), alarmPulseMat);
+  alarmPanel1.position.set(0, 2, -5 * S + 0.11); // front wall inner face
+  alarmPanel1.userData.noCollide = true;
+  lobby.add(alarmPanel1);
+  const alarmPanel2 = new THREE.Mesh(new THREE.PlaneGeometry(10 * S, 3.5), alarmPulseMat);
+  alarmPanel2.position.set(-6 * S + 0.11, 2, 0); // left wall inner face
+  alarmPanel2.rotation.y = Math.PI / 2;
+  alarmPanel2.userData.noCollide = true;
+  lobby.add(alarmPanel2);
+
+  // Emergency light strips along the lobby ceiling edges — glow red during alarm
+  const emergencyLightMat = createEmergencyLightMaterial({ color: 0xff2200 });
+  const _emergGeo = new THREE.PlaneGeometry(3.5 * S, 0.15);
+  [[-3, 3.85, -3], [3, 3.85, -3], [-3, 3.85, 3], [3, 3.85, 3]].forEach(([x, y, z]) => {
+    const strip = new THREE.Mesh(_emergGeo, emergencyLightMat);
+    strip.position.set(x * S, y, z * S);
+    strip.rotation.x = Math.PI / 2;
+    strip.userData.noCollide = true;
+    lobby.add(strip);
+  });
+  // Office area emergency strips
+  const _emergGeo2 = new THREE.PlaneGeometry(2.5 * S, 0.12);
+  [[8, 3.85, 14], [8, 3.85, 20], [12, 3.85, 17]].forEach(([x, y, z]) => {
+    const strip = new THREE.Mesh(_emergGeo2, emergencyLightMat);
+    strip.position.set(x, y, z);
+    strip.rotation.x = Math.PI / 2;
+    strip.userData.noCollide = true;
+    lobby.add(strip);
+  });
+
   // PLACEHOLDER: reception desk — replace this box with a real desk model
     lobby.add(makeReceptionDesk());
 
@@ -1741,6 +1775,8 @@ return {
     cupboardDoorMat,
     keycardMat,
     keycardChipMat,
+    alarmPulseMat,
+    emergencyLightMat,
     lightFixturePositions,
     roomScale: S,
   };

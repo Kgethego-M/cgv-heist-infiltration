@@ -3,6 +3,7 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { getGuardTemplate } from '../ai/guards.js';
 import {
   createLaserMaterial, createHologramMaterial, createVisionConeMaterial, createFanGeometry,
+  createPressurePlateMaterial, createVaultFloorMaterial, createForceFieldMaterial, createEmergencyLightMaterial,
 } from '../fx/shaders.js';
 import { SEC, NavGrid, createGuardForce } from './security.js';
 import { createPuzzleUI } from './puzzles.js';
@@ -609,7 +610,7 @@ export function createLevel3(scene, hooks = {}) {
   });
 
   const plates = PLATES.map((p) => {
-    const mat = track(plateMatBase.clone());
+    const mat = track(createPressurePlateMaterial({ color: 0xffaa00, alertColor: 0xff2222 }));
     const mesh = new THREE.Mesh(_plateGeo, mat);
     mesh.position.set(p.x, 0.03, p.z);
     mesh.name = 'marker_pressurePlate';
@@ -666,7 +667,9 @@ export function createLevel3(scene, hooks = {}) {
   vault.add(makeFloor(8, VZ1 - TZ1, 0, (TZ1 + VZ1) / 2));                               // back lobby
   vault.add(makeFloor(stripW, tileGridD, 4 - stripW / 2, (TZ0 + TZ1) / 2));
   vault.add(makeFloor(stripW, tileGridD, -(4 - stripW / 2), (TZ0 + TZ1) / 2));
-  vault.add(makeFloor(tileGridW, tileGridD, 0, (TZ0 + TZ1) / 2, PIT_Y, track(new THREE.MeshStandardMaterial({ color: 0x050506 }))));
+  // Vault floor shader — procedural tiles glow green for safe path, red for alarm
+  const vaultFloorMat = track(createVaultFloorMaterial({ baseColor: 0x0a0a12, safeColor: 0x33ff88, dangerColor: 0xff2222 }));
+  vault.add(makeFloor(tileGridW, tileGridD, 0, (TZ0 + TZ1) / 2, PIT_Y, vaultFloorMat));
   vault.add(makeCeiling(8, VZ1 - VZ0, 0, CEILING_HEIGHT, (VZ0 + VZ1) / 2));
   // front wall: doorway from the Clue Hall with a glass window either side of it
   vault.add(makeWall(1, 4, 0.2, -3.5, 2, VZ0));
@@ -721,6 +724,13 @@ export function createLevel3(scene, hooks = {}) {
   vaultItem.position.set(PED_X, 1.35, ITEM_Z);
   vaultItem.name = 'marker_vaultItem';
   vault.add(vaultItem);
+
+  // Force field barrier around the artifact — visible until the vault door opens
+  const artifactFieldMat = track(createForceFieldMaterial({ color: 0x4488ff, opacity: 0.3 }));
+  const artifactField = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 2.5, 24, 1, true), artifactFieldMat);
+  artifactField.position.set(PED_X, 1.25, ITEM_Z);
+  artifactField.name = 'furniture_artifactField';
+  vault.add(artifactField);
 
   // THE dramatic light: a shadow-casting spot straight onto the pedestal (tight shadow frustum).
   const spotTarget = new THREE.Object3D();
@@ -861,6 +871,24 @@ export function createLevel3(scene, hooks = {}) {
     mazeFixtures.push(new THREE.Vector3(S2.xc + dx, ROOF.y + 3.1, ROOF.z0 + dz));
   });
   level3.add(escape);
+
+  // Emergency light strips along the escape wing walls — glow red when alarm is active
+  const emergencyLightMat = track(createEmergencyLightMaterial({ color: 0xff2200 }));
+  const _emergStripGeo = new THREE.PlaneGeometry(2.5, 0.15);
+  // Ground floor maze walls
+  [[E1.x0 + 1, E1.z0 + 2], [E1.x1 - 1, E1.z0 + 4], [E1.x0 + 1, E1.z1 - 2], [E1.x1 - 1, E1.z1 - 4]].forEach(([x, z]) => {
+    const strip = new THREE.Mesh(_emergStripGeo, emergencyLightMat);
+    strip.position.set(x, 2.8, z);
+    strip.rotation.y = Math.random() > 0.5 ? 0 : Math.PI / 2;
+    escape.add(strip);
+  });
+  // Upper floor maze walls
+  [[E2.x0 + 1, E2.z0 + 2], [E2.x1 - 1, E2.z0 + 4], [E2.x0 + 1, E2.z1 - 2], [E2.x1 - 1, E2.z1 - 4]].forEach(([x, z]) => {
+    const strip = new THREE.Mesh(_emergStripGeo, emergencyLightMat);
+    strip.position.set(x, E2.y + 2.8, z);
+    strip.rotation.y = Math.random() > 0.5 ? 0 : Math.PI / 2;
+    escape.add(strip);
+  });
 
   const lightPool = [0, 1, 2, 3].map(() => {
     const l = new THREE.PointLight(0xffc080, 8, 12);
@@ -1246,6 +1274,14 @@ export function createLevel3(scene, hooks = {}) {
     const height = STANCE_HEIGHT[stance] ?? 1.8;
 
     updateTileVisuals(dt);
+    // Vault floor shader uniforms — glow safe path when flashing or permanently lit
+    vaultFloorMat.uniforms.uPathFlash.value = (flashT > 0 || state.pathLit) ? 1.0 : 0.0;
+    vaultFloorMat.uniforms.uAlarmFlash.value = state.vaultAlarmed ? 1.0 : 0.0;
+    // Force field around artifact — disappears once the vault door opens
+    artifactField.visible = !state.vaultOpen;
+    artifactFieldMat.uniforms.uPulse.value = state.vaultAlarmed ? 1.0 : 0.0;
+    // Emergency light strips — glow during vault alarm
+    emergencyLightMat.uniforms.uAlarm.value = state.vaultAlarmed ? 1.0 : 0.0;
     updateDoor(vaultDoor, dt);
     updateDoor(exitDoor, dt);
     updateLightPool(dt, pos);
@@ -1297,7 +1333,7 @@ export function createLevel3(scene, hooks = {}) {
       if (p.tripped) continue;
       if (Math.hypot(pos.x - p.x, pos.z - p.z) < PLATE_RADIUS) {
         p.tripped = true;
-        p.mat.color.setHex(0xff2222); p.mat.emissive.setHex(0xff2222); p.mat.emissiveIntensity = 1.4;
+        p.mat.uniforms.uActive.value = 1.0;
         sfx('denied');
         setAlert('Pressure plate! The guards are coming.');
       }

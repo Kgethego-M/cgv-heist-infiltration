@@ -6,7 +6,11 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import { GuardA, GuardB, loadGuardModel, attachGuardClip } from './ai/guards.js';
 import { Player, loadPlayerModel, attachPlayerClip } from './player/player.js';
 import { loadEarpieceAudio, playLine } from './audio/earpiece.js';
-import { fxTime } from './fx/shaders.js';
+import { fxTime, CinematicGradeShader } from './fx/shaders.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { createDropoff } from './scene/dropoff.js';
 import { createExtraction } from './scene/extraction.js';
 import { startMusic, setMusicLevel, setMusicIntensity } from './audio/music.js';
@@ -40,6 +44,13 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.shadowMap.enabled = true;
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
+
+// Post-processing: cinematic grade pass (vignette, film grain, chromatic aberration)
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const cinematicPass = new ShaderPass(CinematicGradeShader);
+composer.addPass(cinematicPass);
+composer.addPass(new OutputPass());
 
 // 4. Pointer lock controls — mouse-look rotation only, we never call
 // controls.moveForward/moveRight
@@ -105,7 +116,7 @@ function setMissionUiOpen(open, relock) {
 // No hemisphere light — real ceiling fixtures (level1.js) are what light
 // the level now, same as a real office. Kept small and dim as a base so
 // unlit corners aren't pure black, not as the main light source.
-const ambient = new THREE.AmbientLight(0x1a1a2e, 0.25);
+const ambient = new THREE.AmbientLight(0x2a2a3e, 0.45);
 scene.add(ambient);
 
 // One PointLight per ceiling fixture — positions come straight from
@@ -171,6 +182,7 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
 });
 
 // ---- Alarm beacon ---------------------------------------------------------
@@ -408,7 +420,7 @@ function restartFromEndScreen() {
 }
 
 // LEVEL
-const { root, colliders, elevatorPosition, elevatorDoors, elevatorIndicatorMat, keycardMesh, keyMesh, officeDoor, cupboard, cupboardDoorMat, keycardMat, keycardChipMat, lightFixturePositions } = createLevel1(scene);
+const { root, colliders, elevatorPosition, elevatorDoors, elevatorIndicatorMat, keycardMesh, keyMesh, officeDoor, cupboard, cupboardDoorMat, keycardMat, keycardChipMat, alarmPulseMat, emergencyLightMat, lightFixturePositions } = createLevel1(scene);
 enablePropShadows(root);
 addCeilingLights(lightFixturePositions, LEVEL1_LIGHT);
 
@@ -428,10 +440,10 @@ const LEVEL_CONFIG = {
   2: {
     name: 'Server Room & Labs',
     create: createLevel2,
-    ambient: { color: 0x1a2a3a, intensity: 0.3 },
+    ambient: { color: 0x2a3a4a, intensity: 0.55 },
     background: 0x05080c,
     // Level 2 is built with ROOM_SCALE like level 1, so its lights need the same longer reach.
-    light: { color: 0xaad4ff, intensity: 5 * ROOM_SCALE, distance: 7 * ROOM_SCALE, shadowCount: 3 },
+    light: { color: 0xaad4ff, intensity: 7 * ROOM_SCALE, distance: 9 * ROOM_SCALE, shadowCount: 3 },
     minimapSize: 10 * ROOM_SCALE,
     objectiveKey: 'terminalPosition', // (level 2 now uses levelHandle.missions instead; kept for reference)
     objectiveMarker: 'marker_terminal',
@@ -448,7 +460,7 @@ const LEVEL_CONFIG = {
   3: {
     name: 'Vault Wing',
     create: createLevel3,
-    ambient: { color: 0x2a2a34, intensity: 0.5 },     // was 0x14141a / 0.2 - too dark now that the wing has mazes and a tile vault
+    ambient: { color: 0x3a3a44, intensity: 0.7 },     // boosted for visibility
     background: 0x050508,
     light: { color: 0xffb060, intensity: 7, distance: 9, shadowCount: 2 },   // was 4 / 6
     objectiveKey: 'vaultItemPosition',
@@ -1803,6 +1815,7 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.elapsedTime;
   fxTime.value = elapsed; // drives every custom shader's time uniform
+  cinematicPass.uniforms.uTime.value = elapsed; // animate the film grain
 
     if (inMenu) {
     updateMenuCamera(elapsed);
@@ -1884,6 +1897,15 @@ function animate() {
     keycardMat.emissiveIntensity = 0.3 + glow * 0.5;
     keycardChipMat.emissiveIntensity = 0.8 + glow * 0.8;
   }
+
+  // Alarm pulse shader — lobby walls glow red during alarm
+  if (alarmPulseMat) {
+    alarmPulseMat.uniforms.uAlarm.value = game.alarmActive && !game.levelComplete ? 1.0 : 0.0;
+  }
+  // Emergency light strips — glow red during alarm
+  if (emergencyLightMat) {
+    emergencyLightMat.uniforms.uAlarm.value = game.alarmActive && !game.levelComplete ? 1.0 : 0.0;
+  }
   // soundtrack reacts to the game: calm -> tense as alarms / guard detection rise
   if (extractionActive) setMusicIntensity(0);   // let the celebratory sting carry the ending
   else if (!inMenu && !paused) setMusicIntensity(game.alarmActive ? 1 : ((levelHandle && levelHandle.threat) || 0));
@@ -1897,7 +1919,7 @@ function animate() {
   controlsPanelEl.style.display = hudLive ? 'block' : 'none';
   minimapEl.style.display = hudLive ? 'block' : 'none';
 
-  renderer.render(scene, camera);
+  composer.render();
   updateMinimap();
 }
 animate();

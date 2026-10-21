@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { ROOM_SCALE } from './level1.js';
-import { createVisionConeMaterial } from '../fx/shaders.js';
+import { createVisionConeMaterial, createHoloScreenMaterial, createServerLedMaterial, createForceFieldMaterial, createDataStreamMaterial, createEmergencyLightMaterial } from '../fx/shaders.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 // The same shared guard model Level 1 uses. Adjust this path if guards.js lives elsewhere.
 import { getGuardTemplate, loadGuardModel } from '../ai/guards.js';
@@ -165,7 +165,8 @@ function makeNoteTexture(code) {
 
 // Server rack. Rotated so its 1.2m side runs along Z (forms aisle rows) and
 // its LED face points `faceDir` (+1 = toward +x, -1 = toward -x).
-function makeServerRack(x, z, faceDir = 1) {
+// Uses a custom shader for animated blinking LEDs (see fx/shaders.js).
+function makeServerRack(x, z, faceDir = 1, ledMat) {
   const rack = new THREE.Group();
   rack.name = 'furniture_serverRack';
   rack.position.set(x, 0, z);
@@ -176,11 +177,11 @@ function makeServerRack(x, z, faceDir = 1) {
   body.name = 'collider_serverRack';
   rack.add(body);
 
-  for (let i = 0; i < 4; i++) {
-    const led = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.02), ledMat);
-    led.position.set(-0.4 + i * 0.25, 1.8, 0.41);
-    rack.add(led);
-  }
+  // LED panel — custom shader drives the blink pattern per-cell
+  const ledPanel = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.35), ledMat);
+  ledPanel.position.set(0, 1.85, 0.411);
+  ledPanel.name = 'furniture_ledPanel';
+  rack.add(ledPanel);
   return rack;
 }
 
@@ -1010,12 +1011,35 @@ export function createLevel2(scene, hooks = {}) {
 
   // Rack rows. Inner rows (x = ±3.5) in three blocks with cross-aisles
   // between; shorter outer rows make side paths. Racks face the aisle.
+  // Each rack gets a custom LED shader panel (animated blink pattern).
+  const rackLedMat = track(createServerLedMaterial({ color: 0x33ff66, activity: 0.3 }));
   const rackRow = (x, zStart, count, face) => {
-    for (let i = 0; i < count; i++) maze.add(makeServerRack(x, zStart + i * 1.25, face));
+    for (let i = 0; i < count; i++) maze.add(makeServerRack(x, zStart + i * 1.25, face, rackLedMat));
   };
   [7.5, 14, 20.5].forEach((z0) => { rackRow(-3.5, z0, 3, 1); rackRow(3.5, z0, 3, -1); });
   rackRow(-7, 10, 2, 1); rackRow(-7, 17, 2, 1); rackRow(-7, 23.5, 2, 1);
   rackRow(7, 8, 2, -1);
+
+  // Data stream accent panels on the maze walls — scrolling matrix-style effect
+  const dataStreamMat = track(createDataStreamMaterial({ color: 0x33ff99, speed: 1.2, brightness: 0.7 }));
+  const _dsPanelGeo = new THREE.PlaneGeometry(1.5, 2.5);
+  [[-5.8, 11, Math.PI / 2], [5.8, 11, -Math.PI / 2], [-5.8, 18, Math.PI / 2], [5.8, 18, -Math.PI / 2],
+   [-5.8, 24, Math.PI / 2], [5.8, 24, -Math.PI / 2]].forEach(([x, z, ry]) => {
+    const panel = new THREE.Mesh(_dsPanelGeo, dataStreamMat);
+    panel.position.set(x, 2.0, z);
+    panel.rotation.y = ry;
+    maze.add(panel);
+  });
+
+  // Emergency light strips along the server maze ceiling edges
+  const emergencyMat = track(createEmergencyLightMaterial({ color: 0xff2200 }));
+  const _emergGeo = new THREE.PlaneGeometry(3.0, 0.12);
+  [[-4, 3.85, 10], [4, 3.85, 10], [-4, 3.85, 16], [4, 3.85, 16], [-4, 3.85, 22], [4, 3.85, 22]].forEach(([x, y, z]) => {
+    const strip = new THREE.Mesh(_emergGeo, emergencyMat);
+    strip.position.set(x, y, z);
+    strip.rotation.x = Math.PI / 2;
+    maze.add(strip);
+  });
 
   // Sticky note on the first inner-left rack (+x face), in the maze's first aisle.
   const NOTE_RACK = { x: -3.5, z: 7.5 };
@@ -1032,12 +1056,16 @@ export function createLevel2(scene, hooks = {}) {
   const NOTE_SPOT = new THREE.Vector3(NOTE_RACK.x + 0.41, 0, NOTE_RACK.z - 0.3);
 
   // Cameras — on the side walls, sweeping across the aisles.
+  // 5 cameras total: 3 on side walls + 2 ceiling-mounted for overlapping coverage.
   const lensMat = track(new THREE.MeshStandardMaterial({ color: 0xff3333, emissive: 0xff3333, emissiveIntensity: 0.6 }));
   /* cone shader */ // each camera gets its own custom-shader cone (see fx/shaders.js)
   const camDefs = [
     { x: R2.x0 + WALL_T / 2 + 0.05, z: 9,  yaw: Math.PI / 2,  phase: 0 },
     { x: R2.x1 - WALL_T / 2 - 0.05, z: 13, yaw: -Math.PI / 2, phase: 2.1 },
     { x: R2.x0 + WALL_T / 2 + 0.05, z: 22, yaw: Math.PI / 2,  phase: 4.2 },
+    // Two additional cameras covering the back aisles and centre cross-aisle
+    { x: R2.x1 - WALL_T / 2 - 0.05, z: 20, yaw: -Math.PI / 2, phase: 1.5 },
+    { x: 0, z: 16.5, yaw: 0, phase: 3.3 },   // ceiling-mounted, faces +z down the centre aisle
   ];
   const cameras = camDefs.map((c) => {
     // each camera gets its own cone material so only the camera that sees you lights up
@@ -1060,7 +1088,29 @@ export function createLevel2(scene, hooks = {}) {
     maze.add(mesh);
     return { mesh, mat, z, y: LASER_BEAM_Y, halfW: 3.1, cooldown: 0, flash: 0 };
   });
+  // terminal room doorway laser is added later (after term group is built) and pushed here
+  let termLaserGate = null;
   level2.add(maze);
+
+  // Motion sensor floor pads — step on them and linger >1.5s to trigger the alarm.
+  // Gives the player a window to move off before it escalates.
+  const MOTION_SENSOR_RADIUS = 0.7;
+  const MOTION_SENSOR_GRACE = 1.5; // seconds before it trips
+  const motionSensorDefs = [
+    { x: -1.5, z: 11.5 },  // between inner rack rows, first cross-aisle
+    { x: 1.8, z: 17.5 },   // between inner rack rows, second cross-aisle
+    { x: 0, z: 23 },       // centre aisle near the back
+  ];
+  const motionSensors = motionSensorDefs.map((d) => {
+    const sensorMat = track(new THREE.MeshStandardMaterial({
+      color: 0x222233, emissive: 0x000000, emissiveIntensity: 0, transparent: true, opacity: 0.6,
+    }));
+    const sensor = new THREE.Mesh(new THREE.CylinderGeometry(MOTION_SENSOR_RADIUS, MOTION_SENSOR_RADIUS, 0.02, 16), sensorMat);
+    sensor.position.set(d.x, 0.02, d.z);
+    sensor.name = 'marker_motionSensor';
+    maze.add(sensor);
+    return { ...d, mat: sensorMat, timer: 0, tripped: false };
+  });
 
   // ============ CAMERA CONTROL ROOM (optional branch, east of the maze) ============
   const ctrl = new THREE.Group();
@@ -1091,15 +1141,24 @@ export function createLevel2(scene, hooks = {}) {
   // front wall z=R4.z0 is the maze's back wall
   [[-3, 22], [3, 22], [-3, 25], [3, 25]].forEach(([x, z]) => addLight(term, x * S, z * S));
 
+  // Laser gate across the terminal room doorway — must crawl under to enter
+  const TERM_LASER_Y = 0.9;
+  const termLaserMat = track(markerMat.laser.clone());
+  const termLaser = makeLaserGate(0, TERM_LASER_Y, R4.z0, DOOR_W - 0.4, 0, termLaserMat);
+  term.add(termLaser);
+  termLaserGate = { mesh: termLaser, mat: termLaserMat, z: R4.z0, y: TERM_LASER_Y, halfW: (DOOR_W - 0.4) / 2, cooldown: 0, flash: 0 };
+  laserGates.push(termLaserGate);
+
   const DESK_Z = R4.z1 - 1.1;
   const desk = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.9, 0.6), rackMat);
   desk.position.set(0, 0.45, DESK_Z);
   desk.name = 'collider_terminalDesk';
   term.add(desk);
 
-  const monitorMat = track(new THREE.MeshStandardMaterial({ color: 0xff6644, emissive: 0xff6644, emissiveIntensity: 0.9 }));
-  const monitor = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.5, 0.05), monitorMat);
-  monitor.position.set(0, 1.2, DESK_Z + 0.15);
+  // Terminal monitor — custom holographic screen shader (glitchy CRT effect)
+  const monitorMat = track(createHoloScreenMaterial({ color: 0xff6644, glitch: 0.1 }));
+  const monitor = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.5), monitorMat);
+  monitor.position.set(0, 1.2, DESK_Z + 0.18);
   monitor.name = 'marker_terminalScreen';
   term.add(monitor);
 
@@ -1109,6 +1168,13 @@ export function createLevel2(scene, hooks = {}) {
   terminalMarker.name = 'marker_terminal';
   term.add(terminalMarker);
   const TERMINAL_SPOT = new THREE.Vector3(0, 0, DESK_Z);
+
+  // Force field barrier around the terminal — visible until hacked
+  const termFieldMat = track(createForceFieldMaterial({ color: 0xff6644, opacity: 0.25 }));
+  const termField = new THREE.Mesh(new THREE.BoxGeometry(2.0, 2.2, 1.4), termFieldMat);
+  termField.position.set(0, 1.1, DESK_Z + 0.1);
+  termField.name = 'furniture_terminalField';
+  term.add(termField);
 
   // Safe — back-left corner, door facing into the room.
   const keypadMat = track(markerMat.safe.clone());
@@ -1200,14 +1266,18 @@ export function createLevel2(scene, hooks = {}) {
     // safe
     keypadMat.color.setHex(state.safeOpen ? 0x33ff99 : 0xff4444);
     keypadMat.emissive.setHex(state.safeOpen ? 0x33ff99 : 0xff4444);
-    // terminal
+    // terminal (holo screen shader — update uniforms instead of material props)
     const c = state.hacked ? 0x66ff66 : state.hasBadge ? 0x33ffcc : 0xff6644;
-    monitorMat.color.setHex(c); monitorMat.emissive.setHex(c);
+    monitorMat.uniforms.uColor.value.setHex(c);
+    monitorMat.uniforms.uGlitch.value = state.hacked ? 0.0 : (state.hasBadge ? 0.3 : 0.1);
     terminalMat.color.setHex(state.hacked ? 0x66ff66 : 0x33ffcc);
     terminalMat.emissive.setHex(state.hacked ? 0x66ff66 : 0x33ffcc);
     // exit elevator
     exitIndicatorMat.color.setHex(state.hacked ? 0x33ff88 : 0xff3333);
     exitIndicatorMat.emissive.setHex(state.hacked ? 0x33ff88 : 0xff3333);
+    // terminal force field — disappears once hacked
+    termField.visible = !state.hacked;
+    termFieldMat.uniforms.uPulse.value = state.hacked ? 0.0 : 0.5;
   }
   refreshWorld();
 
@@ -1399,6 +1469,34 @@ export function createLevel2(scene, hooks = {}) {
       }
     });
 
+    // --- motion sensors: floor pads that trigger if you stand on them >1.5s ---
+    motionSensors.forEach((s) => {
+      const d = Math.hypot(pos.x - s.x, pos.z - s.z);
+      const onPad = d < MOTION_SENSOR_RADIUS;
+      if (onPad && !s.tripped) {
+        s.timer += dt;
+        // Visual warning: pad glows yellow -> orange -> red as timer fills
+        const frac = Math.min(1, s.timer / MOTION_SENSOR_GRACE);
+        s.mat.emissive.setHex(frac < 0.5 ? 0xffaa00 : 0xff3300);
+        s.mat.emissiveIntensity = frac * 2.0;
+        if (s.timer >= MOTION_SENSOR_GRACE) {
+          s.tripped = true;
+          s.mat.emissive.setHex(0xff0000);
+          s.mat.emissiveIntensity = 3.0;
+          escalate('motion_sensor');
+          H.onSubtitle('Motion sensor tripped! Guards alerted to your position.', 3000);
+        }
+      } else if (!onPad) {
+        s.timer = Math.max(0, s.timer - dt * 2); // drains when you step off
+        s.mat.emissiveIntensity = Math.max(0, s.mat.emissiveIntensity - dt * 3);
+        if (s.timer <= 0) {
+          s.mat.emissive.setHex(0x000000);
+          s.mat.emissiveIntensity = 0;
+          if (s.tripped) s.tripped = false; // resets after enough time off
+        }
+      }
+    });
+
     // --- guards + the entry elevator opening to let them out ---
     const speed = SEC.BASE_SPEED + SEC.SPEED_PER_LEVEL * Math.max(0, state.securityLevel - 1);
     force.update(dt, pos, speed, onCatch);
@@ -1430,6 +1528,14 @@ export function createLevel2(scene, hooks = {}) {
 
       securityUpdate(dt, pos);
 
+      // LED activity scales with security level (more alert = more LEDs blinking)
+      rackLedMat.uniforms.uActivity.value = 0.3 + state.securityLevel * 0.14;
+
+      // Emergency light strips glow during alarm
+      emergencyMat.uniforms.uAlarm.value = state.alarmRaised ? 1.0 : 0.0;
+      // Data stream brightness pulses with security level
+      dataStreamMat.uniforms.uBrightness.value = 0.5 + state.securityLevel * 0.12;
+
       // safe door swing
       if (state.safeOpen && SAFE_SWING.t < 1) {
         SAFE_SWING.t = Math.min(1, SAFE_SWING.t + dt / 0.9);
@@ -1441,10 +1547,10 @@ export function createLevel2(scene, hooks = {}) {
       if (!state.hacked && state.hasBadge && atTerminal && eHeld && !ui.isOpen()) {
         state.hackProgress = Math.min(1, state.hackProgress + dt / HACK_TIME);
         ui.setHold(state.hackProgress);
-        monitorMat.emissiveIntensity = 0.6 + 0.4 * Math.abs(Math.sin(elapsed * 14)); // flicker while hacking
+        monitorMat.uniforms.uGlitch.value = 0.6 + 0.4 * Math.abs(Math.sin(elapsed * 14)); // glitch while hacking
         if (state.hackProgress >= 1) {
           state.hacked = true;
-          monitorMat.emissiveIntensity = 0.9;
+          monitorMat.uniforms.uGlitch.value = 0.0;
           ui.setHold(null);
           sfx('pickup');
           refreshWorld(); refreshTracker();
@@ -1453,7 +1559,7 @@ export function createLevel2(scene, hooks = {}) {
         }
       } else if (state.hackProgress > 0 && !state.hacked) {
         state.hackProgress = Math.max(0, state.hackProgress - dt * 1.5);
-        monitorMat.emissiveIntensity = 0.9;
+        monitorMat.uniforms.uGlitch.value = 0.1;
         ui.setHold(state.hackProgress > 0 ? state.hackProgress : null);
       }
 
