@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { ROOM_SCALE } from './level1.js';
-import { createVisionConeMaterial, createHoloScreenMaterial, createServerLedMaterial, createForceFieldMaterial, createDataStreamMaterial, createEmergencyLightMaterial } from '../fx/shaders.js';
+import { createVisionConeMaterial, createLaserMaterial, createHoloScreenMaterial, createServerLedMaterial, createForceFieldMaterial, createDataStreamMaterial, createEmergencyLightMaterial } from '../fx/shaders.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 // The same shared guard model Level 1 uses. Adjust this path if guards.js lives elsewhere.
 import { getGuardTemplate, loadGuardModel } from '../ai/guards.js';
