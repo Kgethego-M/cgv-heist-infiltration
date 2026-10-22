@@ -520,6 +520,15 @@ function createHud() {
 // ============================================================
 // LEVEL
 // ============================================================
+// Null-safe glow colour: a material may be standard (.color + .emissive), basic (.color only) or a shader material
+// (uColor uniform). Sets what it supports and never throws. Used by respawn(), which runs when you are caught.
+function setGlow(mat, hex) {
+  if (!mat) return;
+  if (mat.color) mat.color.setHex(hex);
+  if (mat.emissive) mat.emissive.setHex(hex);
+  else if (mat.uniforms && mat.uniforms.uColor && mat.uniforms.uColor.value) mat.uniforms.uColor.value.setHex(hex);
+}
+
 export function createLevel3(scene, hooks = {}) {
   const H = {
     game: { alarmActive: false, objectiveComplete: false, escapeTimeRemaining: null },
@@ -1112,11 +1121,11 @@ export function createLevel3(scene, hooks = {}) {
   }
   function solveStation(st) {
     st.solved = true;
-    st.mat.color.setHex(0x33ff88); st.mat.emissive.setHex(0x33ff88);
+    setGlow(st.mat, 0x33ff88);
     sfx('unlock');
     if (st.kind === 'lock') {
       state.locks[st.n] = true;
-      lampMats[st.n].color.setHex(0x33ff88); lampMats[st.n].emissive.setHex(0x33ff88);
+      setGlow(lampMats[st.n], 0x33ff88);
       const n = state.locks.filter(Boolean).length;
       if (n === 3) openVault(); else H.onSubtitle(`Lock released (${n}/3).`, 2500);
     } else {
@@ -1168,16 +1177,16 @@ export function createLevel3(scene, hooks = {}) {
     force.clear();
     guards.forEach((g) => g.reset());
     resetTiles();
-    plates.forEach((p) => { p.tripped = false; p.mat.color.setHex(0xffaa00); p.mat.emissive.setHex(0xffaa00); p.mat.emissiveIntensity = 0.6; });
+    plates.forEach((p) => { p.tripped = false; setGlow(p.mat, 0xffaa00); p.mat.emissiveIntensity = 0.6; });
     state.hasItem = cp.hasItem;
     state.alert = false; state.wrongSteps = 0; state.stealProgress = 0; state.health = MAX_HP; state.dying = null;
     state.vaultOpen = state.locks.every(Boolean);
     stations.forEach((st) => {
       st.solved = st.kind === 'lock' ? state.locks[st.n] : state.clues[st.n];
       const col = st.solved ? 0x33ff88 : (st.kind === 'lock' ? 0xffaa33 : 0x33aaff);
-      st.mat.color.setHex(col); st.mat.emissive.setHex(col);
+      setGlow(st.mat, col);
     });
-    lampMats.forEach((m, i) => { const c = state.locks[i] ? 0x33ff88 : 0xff3333; m.color.setHex(c); m.emissive.setHex(c); });
+    lampMats.forEach((m, i) => { const c = state.locks[i] ? 0x33ff88 : 0xff3333; setGlow(m, c); });
     setDoor(vaultDoor, state.vaultOpen, true);
     setDoor(exitDoor, state.hasItem, true);
     vaultItem.visible = !state.hasItem;

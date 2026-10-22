@@ -1782,3 +1782,5 @@ return {
   };
 
 }
+// Shared with Level 2 so every elevator in the game is the same model (see level2.js).
+export { makeElevator as makeSharedElevator };
