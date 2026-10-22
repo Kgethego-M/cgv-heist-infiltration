@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { updateLevel1Objectives } from './ui/l1Objectives.js';
 import { createLevel1, ELEVATOR_IDLE_COLOR, ELEVATOR_ALARM_COLOR, ROOM_SCALE } from './levels/level1.js';
 import { createLevel2 } from './levels/level2.js';
 import { createLevel3 } from './levels/level3.js';
@@ -1792,6 +1793,7 @@ function setMinimapViewSize(size) {
 }
 minimapCamera.position.set(0, 30, 0);
 minimapCamera.rotation.x = -Math.PI / 2;
+minimapCamera.layers.enable(1);   // also draw layer 1: the exit/entry pads are hidden in the 3D view
 
 function updateMinimap() {
   minimapCamera.position.x = player.group.position.x;
@@ -1918,6 +1920,7 @@ function animate() {
   const hudLive = gameplayLive && !settingsOpen;
   controlsPanelEl.style.display = hudLive ? 'block' : 'none';
   minimapEl.style.display = hudLive ? 'block' : 'none';
+  updateLevel1Objectives(game, hudLive && currentLevel === 1);   // Level 1 task list
 
   composer.render();
   updateMinimap();
