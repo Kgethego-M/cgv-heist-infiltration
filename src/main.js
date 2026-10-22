@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import './ui/loadingScreen.js';   // loading screen: must be the first import after three
 import { updateLevel1Objectives } from './ui/l1Objectives.js';
 import { createLevel1, ELEVATOR_IDLE_COLOR, ELEVATOR_ALARM_COLOR, ROOM_SCALE } from './levels/level1.js';
 import { createLevel2 } from './levels/level2.js';
@@ -8,6 +9,8 @@ import { GuardA, GuardB, loadGuardModel, attachGuardClip } from './ai/guards.js'
 import { Player, loadPlayerModel, attachPlayerClip } from './player/player.js';
 import { loadEarpieceAudio, playLine } from './audio/earpiece.js';
 import { fxTime, CinematicGradeShader } from './fx/shaders.js';
+import { updateRunStats } from './ui/runStats.js';   // DEBRIEF on the end screens
+import { registerGraphics } from './ui/displaySettings.js';   // Settings -> DISPLAY (brightness, quality, scanlines)
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
@@ -52,6 +55,7 @@ composer.addPass(new RenderPass(scene, camera));
 const cinematicPass = new ShaderPass(CinematicGradeShader);
 composer.addPass(cinematicPass);
 composer.addPass(new OutputPass());
+registerGraphics({ renderer, composer, cinematicPass, scene });   // hand the render chain to the Settings -> DISPLAY controls
 
 // 4. Pointer lock controls — mouse-look rotation only, we never call
 // controls.moveForward/moveRight
@@ -1920,6 +1924,7 @@ function animate() {
   const hudLive = gameplayLive && !settingsOpen;
   controlsPanelEl.style.display = hudLive ? 'block' : 'none';
   minimapEl.style.display = hudLive ? 'block' : 'none';
+  updateRunStats(game, { live: hudLive, level: currentLevel });   // run stats for the end screen
   updateLevel1Objectives(game, hudLive && currentLevel === 1);   // Level 1 task list
 
   composer.render();
