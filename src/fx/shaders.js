@@ -627,7 +627,7 @@ export const CinematicGradeShader = {
   uniforms: {
     tDiffuse: { value: null },
     uTime: { value: 0 },
-    uScanlines: { value: 0.04 },    // scanline intensity (0 = off, 0.1 = strong)
+    uScanlines: { value: 0.0 } /* scanlines OFF (was 0.04) */,    // scanline intensity (0 = off, 0.1 = strong)
     uGlow: { value: 0.12 },         // soft glow strength
     uAberration: { value: 0.0008 }, // very subtle RGB fringing
     uTint: { value: 0.06 },         // cool-blue colour grade strength
