@@ -4,6 +4,7 @@
 const STORAGE_KEY = 'heist.display.v1';
 const SCANLINE_STRENGTH = 0.04;          // the strength the effect was designed with (0 = off, 0.1 = strong)
 const LOW_PIXEL_RATIO = 0.75;            // Low draws at 75% resolution
+const GAMMA_STRENGTH = 1.1;              // how hard the slider lifts the shadows above 100%
 const BRIGHTNESS_MIN = 60;
 const BRIGHTNESS_MAX = 220;
 
@@ -58,7 +59,15 @@ function apply() {
   //    exposure change). Low: the grade pass is off, so use a CSS brightness filter on the canvas instead.
   const f = state.brightness / 100;
   if (high) {
-    cinematicPass.uniforms.uBrightness.value = baseBrightness * f;
+    const u = cinematicPass.uniforms;
+    if (u.uGamma) {
+      // A plain multiply barely changes near-black areas (the Level 3 maze), so the slider mainly bends the SHADOWS with a
+      // gamma curve, plus a small exposure change.
+      u.uGamma.value = f >= 1 ? 1 + (f - 1) * GAMMA_STRENGTH : 1 - (1 - f) * 0.5;
+      u.uBrightness.value = baseBrightness * (f >= 1 ? 1 + (f - 1) * 0.25 : f);
+    } else {
+      u.uBrightness.value = baseBrightness * f;               // older shader without uGamma: exposure only
+    }
     renderer.domElement.style.filter = '';
   } else {
     renderer.domElement.style.filter = f === 1 ? '' : 'brightness(' + Math.pow(f, 0.6).toFixed(3) + ')';
@@ -77,9 +86,20 @@ function syncUI() {
     b.classList.toggle('active', (b.dataset.s === 'on') === state.scanlines);
     b.disabled = state.quality === 'low';
   });
-  ui.note.textContent = state.quality === 'low'
-    ? 'Low: shadows, glow and the film grade are off, drawn at 75% resolution. Faster on older laptops.'
-    : '';
+  refreshNote();
+}
+
+function refreshNote() {
+  if (!ui) return;
+  const mm = document.getElementById('mainMenu');
+  const onMenu = !!mm && getComputedStyle(mm).display !== 'none';
+  if (state.quality === 'low') {
+    ui.note.textContent = 'Low: shadows, glow and the film grade are off, drawn at 75% resolution. Faster on older laptops.';
+  } else if (onMenu) {
+    ui.note.textContent = 'Brightness changes the game view, not this menu picture. To see it, pause during a mission (P), open Settings and hold the slider.';
+  } else {
+    ui.note.textContent = 'Hold the brightness slider and this panel fades, so you can see the game behind it.';
+  }
 }
 
 function buildUI() {
@@ -92,7 +112,12 @@ function buildUI() {
     '.disp-sub{margin-top:20px !important;padding-top:14px;border-top:1px solid rgba(232,226,208,0.15);margin-bottom:6px !important}' +
     '.disp-btns button.active{background:rgba(232,226,208,0.30);color:#fff;border-color:rgba(232,226,208,0.75)}' +
     '.disp-btns button:disabled{opacity:.4;cursor:not-allowed}' +
-    '.disp-note{font-size:12px;color:#9a937f;text-align:center;min-height:16px;margin-top:4px}';
+    '.disp-note{font-size:12px;color:#9a937f;text-align:center;min-height:16px;margin-top:4px}' +
+    '#settingsPanel{transition:background .15s}' +
+    '#settingsPanel.disp-previewing{background:rgba(4,6,9,0) !important}' +
+    '#settingsPanel.disp-previewing .settings-card{background:transparent !important;border-color:transparent !important;box-shadow:none !important}' +
+    '#settingsPanel.disp-previewing .settings-card > *:not(#dispSection){visibility:hidden}' +
+    '#settingsPanel.disp-previewing #dispSection{text-shadow:0 1px 8px #000,0 0 3px #000}';
   document.head.appendChild(style);
 
   const sec = document.createElement('div');
@@ -122,6 +147,14 @@ function buildUI() {
     ui.val.textContent = state.brightness + '%';
     apply(); save();
   });
+  const panel = document.getElementById('settingsPanel');
+  const startPreview = () => { if (panel) panel.classList.add('disp-previewing'); };
+  const endPreview = () => { if (panel) panel.classList.remove('disp-previewing'); };
+  ui.slider.addEventListener('pointerdown', startPreview);
+  ui.slider.addEventListener('blur', endPreview);
+  window.addEventListener('pointerup', endPreview);
+  window.addEventListener('pointercancel', endPreview);
+  if (panel) new MutationObserver(refreshNote).observe(panel, { attributes: true, attributeFilter: ['style'] });
   ui.qBtns.forEach((b) => b.addEventListener('click', () => { state.quality = b.dataset.q; apply(); save(); syncUI(); }));
   ui.sBtns.forEach((b) => b.addEventListener('click', () => { state.scanlines = b.dataset.s === 'on'; apply(); save(); syncUI(); }));
   syncUI();

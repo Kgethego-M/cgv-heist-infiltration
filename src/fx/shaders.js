@@ -632,6 +632,7 @@ export const CinematicGradeShader = {
     uAberration: { value: 0.0008 }, // very subtle RGB fringing
     uTint: { value: 0.06 },         // cool-blue colour grade strength
     uBrightness: { value: 1.04 },   // slight brightness boost
+    uGamma: { value: 1.0 },         // shadow lift for the Settings brightness slider (1 = off)
   },
   vertexShader: /* glsl */ `
     varying vec2 vUvG;
@@ -648,6 +649,7 @@ export const CinematicGradeShader = {
     uniform float uAberration;
     uniform float uTint;
     uniform float uBrightness;
+    uniform float uGamma;
     varying vec2 vUvG;
 
     void main() {
@@ -690,6 +692,7 @@ export const CinematicGradeShader = {
       float vig = 1.0 - r2 * 0.3;
       col *= mix(1.0, vig, 0.25);
 
+      col = pow(max(col, vec3(0.0)), vec3(1.0 / uGamma));   // shadow lift (the Settings brightness slider)
       gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
     }
   `,

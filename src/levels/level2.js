@@ -223,11 +223,33 @@ function makeCamera(x, y, z, baseYaw, phase, lensMat, coneMat) {
 }
 
 function makeLaserGate(x, y, z, width, rotationY = 0, mat = markerMat.laser) {
-  const laser = new THREE.Mesh(new THREE.BoxGeometry(width, 0.03, 0.03), mat);
-  laser.position.set(x, y, z);
-  laser.rotation.y = rotationY;
-  laser.name = 'marker_laser';
-  return laser;
+  // makeLaserGate: Level 3 look. Two crossed shader beams (visible from any angle), an emitter box on each side and a
+  // glowing floor strip, like Level 3's. SAME inputs and output shape as the old bar, and the group sits exactly where the
+  // old bar did, so nothing that positions or removes it needs to change. It is always lethal here, so the shader's on/off
+  // cycle is parked inside one very long "on" period. 'mat' is the per-gate material level2.js flashes when a beam is
+  // tripped; it drives the emitters and the floor strip, so that flash still works.
+  const group = new THREE.Group();
+  group.name = 'LaserGate';
+  group.position.set(x, y, z);
+  group.rotation.y = rotationY;
+  const beamMat = createLaserMaterial({ color: 0xff2222, period: 100000, onTime: 99999, phase: 50 });
+  const span = width - 0.3;
+  const beamGeo = new THREE.PlaneGeometry(1, 0.55);
+  const v = new THREE.Mesh(beamGeo, beamMat);
+  v.scale.x = span;
+  const h = new THREE.Mesh(beamGeo, beamMat);
+  h.scale.x = span; h.rotation.x = Math.PI / 2;
+  v.name = h.name = 'marker_laser';
+  const strip = new THREE.Mesh(new THREE.PlaneGeometry(span, 0.4), mat);
+  strip.rotation.x = -Math.PI / 2; strip.position.y = 0.02 - y; strip.name = 'marker_laserStrip';
+  group.add(strip, v, h);
+  const emitterGeo = new THREE.BoxGeometry(0.22, 0.22, 0.22);
+  [-1, 1].forEach((side) => {
+    const e = new THREE.Mesh(emitterGeo, mat);
+    e.position.set(side * (width / 2 - 0.12), 0, 0);
+    group.add(e);
+  });
+  return group;
 }
 
 function makeWirePuzzlePanel(x, y, z, rotationY, backingMat) {
