@@ -992,6 +992,7 @@ function refreshMenuItems() {
   menuContinueEl.hidden = !sessionStarted;
   menuNewGameEl.disabled = !modelsReady;
   menuNewGameEl.style.opacity = modelsReady ? '' : '0.4';
+  menuNewGameEl.textContent = modelsReady ? 'New Game' : 'Loading…';
   const items = MENU_ITEMS();
   menuIndex = Math.max(0, Math.min(menuIndex, items.length - 1));
   paintSelection(items, menuIndex);
@@ -1175,9 +1176,9 @@ refreshMenuItems();
 // A tiny elapsed-time scheduler so impact sounds and follow-up beats line up
 // with the animation without blocking the render loop.
 const _timers = [];
-function after(delay, fn) { _timers.push({ at: clock.elapsedTime + delay, fn }); }
+function after(delay, fn) { _timers.push({ at: timer.getElapsed() + delay, fn }); }
 function updateTimers() {
-  const now = clock.elapsedTime;
+  const now = timer.getElapsed();
   for (let i = _timers.length - 1; i >= 0; i--) {
     if (now >= _timers[i].at) { const fn = _timers[i].fn; _timers.splice(i, 1); fn(); }
   }
@@ -1767,12 +1768,13 @@ function currentStance() {
 }
 
 // MAIN LOOP
-const clock = new THREE.Clock();
+const timer = new THREE.Timer();
 
 function animate() {
   requestAnimationFrame(animate);
-  const dt = Math.min(clock.getDelta(), 0.05);
-  const elapsed = clock.elapsedTime;
+  timer.update();
+  const dt = Math.min(timer.getDelta(), 0.05);
+  const elapsed = timer.getElapsed();
   fxTime.value = elapsed; // drives every custom shader's time uniform
   cinematicPass.uniforms.uTime.value = elapsed; // animate the film grain
 
