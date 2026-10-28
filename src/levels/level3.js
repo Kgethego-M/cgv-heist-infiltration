@@ -843,6 +843,7 @@ export function createLevel3(scene, hooks = {}) {
     const slab = new THREE.Mesh(new THREE.BoxGeometry(axis === 'x' ? len : STAIR_W, 0.1, axis === 'x' ? STAIR_W : len), ceilingMat);
     if (axis === 'x') { slab.position.set(x + STAIR_RUN / 2, y0 + FLOOR_H / 2 + 3.4, z); slab.rotation.z = ang; }
     else { slab.position.set(x, y0 + FLOOR_H / 2 + 3.4, z + STAIR_RUN / 2); slab.rotation.x = -ang; }
+    slab.name = 'stairCeiling';   // so the camera can collide with it (see cameraBlockers)
     escape.add(slab);
     mazeFixtures.push(new THREE.Vector3(axis === 'x' ? x + STAIR_RUN / 2 : x, y0 + FLOOR_H / 2 + 3.2, axis === 'x' ? z : z + STAIR_RUN / 2));
   };
@@ -1429,6 +1430,8 @@ export function createLevel3(scene, hooks = {}) {
     missions,                                       // puzzles, notes, hold-to-take artifact
     update,
     getFloorHeight,                                 // main.js uses this so the stairs work
+    // Ceilings the third-person camera must not pass through (the sloped stairwell ceilings are NOT walls, so they were missing).
+    cameraBlockers: (() => { const list = []; level3.traverse((o) => { if (o.name === 'ceiling' || o.name === 'stairCeiling') list.push(o); }); return list; })(),
     dispose,
     // 0..1 how alarmed the wing is (drives the music intensity)
     get threat() { return H.game.alarmActive ? 1 : state.alert ? 0.65 : meterMax * 0.5; },
