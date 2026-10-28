@@ -542,7 +542,6 @@ function resetCommonState() {
   game.isHidden = false;
   game.guardSawPlayerHide = false;
   isProne = false;
-  isWallHugging = false;
   isHidden = false;
   cupboardDoorTarget = 0;
   cupboardDoorGoal = 0;
@@ -1307,52 +1306,7 @@ const _camPivot = new THREE.Vector3();
 const _camDir = new THREE.Vector3();
 const _camRaycaster = new THREE.Raycaster();
 
-// WALL HUG — hold Q facing a wall to snap your back against it, then
-// strafe with A/D to slide along it.
-const WALL_HUG_RANGE = 1.2;
-const WALL_HUG_OFFSET = 0.4;
-const WALL_HUG_SPEED = 1.2;
-const _wallRayOrigin = new THREE.Vector3();
-const _wallForward = new THREE.Vector3();
-const _wallNormal = new THREE.Vector3();
-const _wallRight = new THREE.Vector3();
-const _wallRaycaster = new THREE.Raycaster();
-let isWallHugging = false;
-
-function updateWallHug(dt) {
-  if (!isWallHugging) {
-    camera.getWorldDirection(_wallForward);
-    _wallForward.y = 0;
-    _wallForward.normalize();
-
-    _wallRayOrigin.copy(player.group.position);
-    _wallRayOrigin.y = 1.2;
-    _wallRaycaster.set(_wallRayOrigin, _wallForward);
-    _wallRaycaster.far = WALL_HUG_RANGE;
-    const hits = _wallRaycaster.intersectObjects(colliders, false);
-    if (hits.length === 0) return; // nothing to hug — holding Q does nothing here
-
-    _wallNormal.copy(hits[0].face.normal).transformDirection(hits[0].object.matrixWorld);
-    isWallHugging = true;
-
-    player.group.position.copy(hits[0].point).addScaledVector(_wallNormal, WALL_HUG_OFFSET);
-    player.group.rotation.y = Math.atan2(_wallNormal.x, _wallNormal.z);
-  }
-
-  _wallRight.set(_wallNormal.z, 0, -_wallNormal.x);
-  let strafe = 0;
-  if (keys['d'] || keys['arrowright']) strafe += 1;
-  if (keys['a'] || keys['arrowleft']) strafe -= 1;
-
-  if (strafe !== 0) {
-    const nextX = player.group.position.x + _wallRight.x * strafe * WALL_HUG_SPEED * dt;
-    const nextZ = player.group.position.z + _wallRight.z * strafe * WALL_HUG_SPEED * dt;
-    if (!checkCollision(nextX, player.group.position.z)) player.group.position.x = nextX;
-    if (!checkCollision(player.group.position.x, nextZ)) player.group.position.z = nextZ;
-  }
-
-  player.playAction('WallWalk');
-}
+// (wall hug code removed)
 
 const _distTmp = new THREE.Vector3();
 function distanceXZ(a, b) {
@@ -1680,12 +1634,7 @@ function updateMovement(dt) {
   // While a scripted action (takedown / pickup) plays, the mixer owns the
   // animation and the player is rooted — don't touch position or clips here.
   if (playerBusy) return;
-  if (keys['q']) {
-    updateWallHug(dt);
-    return;
-  } else if (isWallHugging) {
-    isWallHugging = false;
-  }
+  // (wall hug removed)
 
   camera.getWorldDirection(_camForward);
   _camForward.y = 0;
@@ -1766,9 +1715,13 @@ function updateCamera() {
 
     _camRaycaster.set(_camPivot, _camDir);
     _camRaycaster.far = camDist;
-    const hits = _camRaycaster.intersectObjects(colliders, false);
-    if (hits.length > 0) {
-      const safeDist = Math.max(hits[0].distance - 0.2, 1.3);
+    let camHit = _camRaycaster.intersectObjects(colliders, false)[0] || null;
+    if (levelHandle && levelHandle.cameraBlockers) {      // ceilings (Level 3 stairwells): not walls, but the camera must not pass through them
+      const ceilingHit = _camRaycaster.intersectObjects(levelHandle.cameraBlockers, false)[0];
+      if (ceilingHit && (!camHit || ceilingHit.distance < camHit.distance)) camHit = ceilingHit;
+    }
+    if (camHit) {
+      const safeDist = Math.max(camHit.distance - 0.2, 1.3);
       _desiredCamPos.copy(_camPivot).addScaledVector(_camDir, safeDist);
     }
   }
