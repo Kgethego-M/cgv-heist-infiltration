@@ -42,7 +42,32 @@ const LINES = {
     text: '"Doors are open \u2014 go, go!"',
     file: 'elevator-win.mp3',
   },
+  // ---- level 2 (server room & labs) ----
+  l2Start: {
+    text: '"Server floor. The cameras sweep in cones \u2014 stay out of the red, or get into the control room and kill the feed."',
+    file: 'l2-start.mp3',
+  },
+  l2Cameras: {
+    text: '"Feed\u2019s dead \u2014 they\u2019re blind. Now find that safe and get the access badge."',
+    file: 'l2-cameras.mp3',
+  },
+  l2Badge: {
+    text: '"Badge secured. The terminal\u2019s live \u2014 hold E on it and do not let go until the upload finishes."',
+    file: 'l2-badge.mp3',
+  },
+  l2Terminal: {
+    text: '"Upload\u2019s through, the exit elevator just unlocked. Move \u2014 before the sweep comes back up."',
+    file: 'l2-terminal.mp3',
+  },
+  l2Alarm: {
+    text: '"They\u2019ve got you on camera \u2014 security is coming up the lift. Keep moving!"',
+    file: 'l2-alarm.mp3',
+  },
   // ---- level 3 (vault wing) ----
+  l3Start: {
+    text: '"Vault wing. Three locks on that door and I can\u2019t see past it \u2014 grab the note in the first room, you\u2019ll want those codes."',
+    file: 'l3-start.mp3',
+  },
   l3VaultOpen: {
     text: '"The vault\u2019s open \u2014 the floor is rigged. Watch the tiles, I\u2019m only going to light that path once."',
     file: 'l3-vault-open.mp3',

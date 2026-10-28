@@ -320,7 +320,14 @@ const game = {
       return 250 + frac * 550;
     });
 
-    showLine(reason === 'partner_found' ? 'alarmPartnerFound' : reason === 'vault' ? 'l3Theft' : 'alarmSpotted');
+    // The alarm caption is level-specific: Level 1's handler talks about the
+    // elevator, Level 2's about security coming up the lift, Level 3's about
+    // the theft. `reason` picks the beat within the level.
+    const alarmLine = reason === 'partner_found' ? 'alarmPartnerFound'
+      : reason === 'vault' ? 'l3Theft'
+      : currentLevel === 2 ? 'l2Alarm'
+      : 'alarmSpotted';
+    showLine(alarmLine);
   },
 
     onCaught(reason = 'caught', customMessage = null) {

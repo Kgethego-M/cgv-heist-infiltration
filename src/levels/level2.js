@@ -977,6 +977,7 @@ export function createLevel2(scene, hooks = {}) {
     onCaught: () => {},              // a guard reached the player -> fail the level
     getGuardTemplate,                // defaults to guards.js's shared model; override only if needed
     localSecurityHud: true,          // set false if main.js draws its own security HUD
+    line: () => {},                  // (key, ms) - earpiece voice line + caption, same as level 1/3
     sfx: {},
     ...hooks,
   };
@@ -1268,6 +1269,24 @@ export function createLevel2(scene, hooks = {}) {
   // Player stance ('stand'/'sprint'/'crouch'/'prone'), recorded every frame by
   // the handle's update() so the laser check knows the player's height.
   let stanceNow = 'stand';
+
+  // ---- earpiece ----
+  // The mission's own subtitles are short, factual beats ("Cameras offline."),
+  // so the handler's voice lines run a beat behind them through this queue
+  // instead of overwriting them. Ticked from missions.update; the whole level
+  // (queue included) is rebuilt on every load/retry, so nothing leaks across.
+  let levelTime = 0;
+  let startLinePlayed = false;
+  const lineQueue = [];
+  const queueLine = (delay, key, ms) => lineQueue.push({ t: delay, key, ms });
+  const tickLines = (dt) => {
+    for (let i = lineQueue.length - 1; i >= 0; i--) {
+      const q = lineQueue[i];
+      q.t -= dt;
+      if (q.t <= 0) { lineQueue.splice(i, 1); H.line(q.key, q.ms); }
+    }
+  };
+
   const HACK_TIME = 3.5;       // seconds of holding E
   const SAFE_SWING = { t: 0 }; // 0..1
   const DOOR_ANIM = { t: 0 };
@@ -1334,6 +1353,7 @@ export function createLevel2(scene, hooks = {}) {
           sfx('unlock');
           refreshWorld(); refreshTracker();
           H.onSubtitle('Cameras offline.', 3000);
+          queueLine(1.1, 'l2Cameras', 5500);
         });
       },
     },
@@ -1346,6 +1366,7 @@ export function createLevel2(scene, hooks = {}) {
           sfx('unlock');
           refreshWorld(); refreshTracker();
           H.onSubtitle('Safe open — access badge acquired. The terminal will accept it.', 4500);
+          queueLine(1.2, 'l2Badge', 5500);
         });
       },
     },
@@ -1426,21 +1447,29 @@ export function createLevel2(scene, hooks = {}) {
     return camRay.intersectObjects(colliders, false).length === 0;
   }
 
+  // Returns true when this call raised the alarm for the first time; callers
+  // use that to skip their own caption, because main.js's triggerAlarm already
+  // plays the handler's l2Alarm line (voice + caption) at that moment.
   function escalate(reason) {
-    if (state.caught) return;
+    if (state.caught) return false;
+    const firstAlarm = !state.alarmRaised;
     state.securityLevel = Math.min(SEC.MAX_LEVEL, state.securityLevel + 1);
     ui.setSecurity(state.securityLevel);
-    if (!state.alarmRaised) {           // the alarm itself goes off once, like Level 1
+    if (firstAlarm) {                   // the alarm itself goes off once, like Level 1
       state.alarmRaised = true;
       sfx('alarm');
       H.triggerAlarm(reason);
     }
     H.onSecurityIncrease(state.securityLevel, reason);
     force.request(state.securityLevel + 1);   // 2, 3, 4... guards per escalation (capped)
-    const what = reason === 'laser_tripped' ? 'Laser tripped' : 'Camera lock';
-    H.onSubtitle(state.securityLevel === 1
-      ? `${what} — alarm! Security is coming up from the lift.`
-      : `${what} — security level ${state.securityLevel}. More guards inbound.`, 3500);
+    // Escalations after the first have no voice line, so they get a caption.
+    // The first one is already narrated by l2Alarm — a caption here would
+    // overwrite the handler mid-sentence.
+    if (!firstAlarm) {
+      const what = reason === 'laser_tripped' ? 'Laser tripped' : 'Camera lock';
+      H.onSubtitle(`${what} — security level ${state.securityLevel}. More guards inbound.`, 3500);
+    }
+    return firstAlarm;
   }
 
   function onCatch() {
@@ -1514,8 +1543,8 @@ export function createLevel2(scene, hooks = {}) {
           s.tripped = true;
           s.mat.emissive.setHex(0xff0000);
           s.mat.emissiveIntensity = 3.0;
-          escalate('motion_sensor');
-          H.onSubtitle('Motion sensor tripped! Guards alerted to your position.', 3000);
+          const firstAlarm = escalate('motion_sensor');
+          if (!firstAlarm) H.onSubtitle('Motion sensor tripped! Guards alerted to your position.', 3000);
         }
       } else if (!onPad) {
         s.timer = Math.max(0, s.timer - dt * 2); // drains when you step off
@@ -1552,6 +1581,15 @@ export function createLevel2(scene, hooks = {}) {
       return true;
     },
     update(dt, elapsed, pos, eHeld) {
+      // Opening earpiece line, timed to land just after main.js's
+      // "Level 2 — Server Room & Labs" title has faded.
+      levelTime += dt;
+      if (!startLinePlayed && levelTime > 3.2) {
+        startLinePlayed = true;
+        H.line('l2Start', 6500);
+      }
+      tickLines(dt);
+
       // cameras sweep until the wire puzzle is solved
       if (!state.wiresSolved) {
         cameras.forEach((c) => { c.head.rotation.y = Math.sin(elapsed * 0.6 + c.phase) * CAM_SWEEP; });
@@ -1586,6 +1624,7 @@ export function createLevel2(scene, hooks = {}) {
           sfx('pickup');
           refreshWorld(); refreshTracker();
           H.onSubtitle('Terminal hacked — head for the exit elevator.', 4000);
+          queueLine(1.2, 'l2Terminal', 5500);
           H.onObjectiveComplete();
         }
       } else if (state.hackProgress > 0 && !state.hacked) {

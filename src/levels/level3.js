@@ -971,7 +971,7 @@ export function createLevel3(scene, hooks = {}) {
     locks: [false, false, false], clues: [false, false, false],
     vaultOpen: false, pathLit: false, wrongSteps: 0,
     hasItem: false, stealProgress: 0, noteRead: { lock: false, clue: false },
-    dying: null, checkpoint: null, waveTimer: 0, roofLine: false,
+    dying: null, checkpoint: null, waveTimer: 0, roofLine: false, startLine: false,
   };
   let meterMax = 0;
   let firstT = null;
@@ -1285,6 +1285,13 @@ export function createLevel3(scene, hooks = {}) {
     if (firstT === null) firstT = t;
     const height = STANCE_HEIGHT[stance] ?? 1.8;
 
+    // Opening earpiece line, timed to land just after main.js's
+    // "Level 3 — Vault Wing" title has faded.
+    if (!state.startLine && t - firstT > 3.2) {
+      state.startLine = true;
+      H.line('l3Start', 6000);
+    }
+
     updateTileVisuals(dt);
     // Vault floor shader uniforms — glow safe path when flashing or permanently lit
     vaultFloorMat.uniforms.uPathFlash.value = (flashT > 0 || state.pathLit) ? 1.0 : 0.0;
@@ -1387,7 +1394,9 @@ export function createLevel3(scene, hooks = {}) {
       H.triggerAlarm('vault');
       H.game.escapeTimeRemaining = null;            // no extraction clock: the maze, the stairs and the guards are the pressure
       // (the checkpoint sweepers stay at their posts: security comes up behind you instead, see the waves below)
-      H.onSubtitle('ALARM! Follow the escape map to the roof!', 4500);
+      // No onSubtitle here: triggerAlarm already puts the handler's l3Theft
+      // line ("...get to the roof!") on screen, and a caption on top would
+      // overwrite it mid-sentence.
       vaultSpot.color.setHex(0xff2a1a);
       force.request(3, 4);
       state.waveTimer = WAVE_EVERY;
